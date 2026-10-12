@@ -75,6 +75,8 @@ class MainActivity : Activity() {
     private fun now() = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
     private fun me() = nameField.text.toString().ifEmpty { "Аноним" }
+    private fun lockMsg(line: String, who: String) =
+        addTextLine("🔒 $who (len=${line.length}) head=${line.take(12)} tail=${line.takeLast(12)}")
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -101,6 +103,11 @@ class MainActivity : Activity() {
             if (sessionKeys.containsKey(peer)) {
                 currentPeer = peer
                 addTextLine("сессия с $peer уже активна, отпечаток: ${Crypto.fingerprint(sessionKeys[peer]!!)}")
+                return@setOnClickListener
+            }
+            if (pendingA.containsKey(peer)) {
+                currentPeer = peer
+                addTextLine("запрос ключа $peer уже в полёте, ждём...")
                 return@setOnClickListener
             }
             currentPeer = peer
@@ -245,6 +252,7 @@ class MainActivity : Activity() {
             "DHREQ" -> {
                 if (parts.size < 5) return
                 val from = parts[1]
+                if (sessionKeys.containsKey(from)) { addTextLine("🔑 сессия с $from уже есть, игнорирую повторный запрос"); return }
                 val p = BigInteger(parts[2], 16)
                 val g = BigInteger(parts[3], 16)
                 val A = BigInteger(parts[4], 16)
@@ -277,13 +285,13 @@ class MainActivity : Activity() {
                 val key = sessionKeys[from]
                 if (key == null) { addTextLine("🔒 нет ключа с $from"); return }
                 val d = Crypto.dec(key, ct)
-                if (d == null) addTextLine("🔒 не читается от $from")
+                if (d == null) lockMsg(ct, "не читается от $from")
                 else showContent(d)
             }
             "===" -> addTextLine(line)
             else -> {
                 val d = Crypto.dec(Crypto.groupKey(), line)
-                if (d == null) addTextLine("🔒 не читается (len=" + line.length + ")")
+                if (d == null) lockMsg(line, "группа не читается")
                 else showContent(d)
             }
         }
