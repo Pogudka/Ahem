@@ -105,7 +105,13 @@ void show(const std::string& d) {
     if (img != std::string::npos) std::cout << d.substr(0, img) << "[📷 фото]\n";
     else std::cout << d << "\n";
 }
+void lockMsg(const std::string& line, const std::string& who) {
+    std::cout << "🔒 " << who << " (len=" << line.size() << ")"
+              << " head=" << line.substr(0, 12)
+              << " tail=" << (line.size() > 12 ? line.substr(line.size() - 12) : "") << "\n";
+}
 void handleDHREQ(const std::string& from, const std::string& pHex, const std::string& gHex, const std::string& AHex) {
+    if (sessionKeys.count(from)) { std::cout << "🔑 сессия с " << from << " уже есть, игнорирую повторный запрос\n"; return; }
     BN_CTX* ctx = BN_CTX_new();
     BIGNUM *p = hex2bn(pHex), *g = hex2bn(gHex), *A = hex2bn(AHex);
     BIGNUM *b = BN_new(), *B = BN_new(), *shared = BN_new();
@@ -156,13 +162,13 @@ void receiver() {
                 std::string from, ct; ss >> from >> ct;
                 if (!sessionKeys.count(from)) { std::cout << "🔒 нет ключа с " << from << "\n"; continue; }
                 std::string d = dec(sessionKeys[from], ct);
-                if (d.empty()) std::cout << "🔒 не читается от " << from << "\n";
+                if (d.empty()) lockMsg(ct, "не читается от " + from);
                 else show(d);
             } else if (line.rfind("===", 0) == 0) {
                 std::cout << line << "\n";
             } else {
                 std::string d = dec(groupKey(), line);
-                if (d.empty()) std::cout << "🔒 не читается (len=" << line.size() << ")\n";
+                if (d.empty()) lockMsg(line, "группа не читается");
                 else show(d);
             }
         }
@@ -183,7 +189,7 @@ int main(int argc, char* argv[]) {
     sendLine("REG " + myName);
     std::thread(receiver).detach();
 
-    std::cout << "Команды: /dm ИМЯ - secret chat, /group - общий чат, /reset ИМЯ - пересоздать ключ, /exit - выход\n";
+    std::cout << "Команды: /dm ИМЯ - secret (ОДИН раз, с одной стороны), /group, /reset ИМЯ, /exit\n";
     std::string input;
     while (true) {
         std::getline(std::cin, input);
@@ -200,11 +206,10 @@ int main(int argc, char* argv[]) {
         if (input.rfind("/dm ", 0) == 0) {
             std::string peer = input.substr(4);
             if (sessionKeys.count(peer)) {
-                std::cout << "сессия с " << peer << " уже активна (отпечаток " << fingerprint(sessionKeys[peer])
-                          << "). /reset " << peer << " чтобы пересоздать.\n";
-                currentPeer = peer;
-                continue;
+                std::cout << "сессия с " << peer << " уже активна (отпечаток " << fingerprint(sessionKeys[peer]) << ")\n";
+                currentPeer = peer; continue;
             }
+            if (pendingA.count(peer)) { std::cout << "запрос ключа " << peer << " уже в полёте, ждём...\n"; currentPeer = peer; continue; }
             currentPeer = peer;
             BN_CTX* ctx = BN_CTX_new();
             BIGNUM *p = BN_new(), *g = BN_new(), *a = BN_new(), *A = BN_new();
