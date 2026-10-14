@@ -1,12 +1,14 @@
 #include <iostream>
-#include <string>
+#include <fstream>
 #include <sstream>
+#include <string>
 #include <cstring>
 #include <ctime>
 #include <thread>
 #include <vector>
 #include <map>
 #include <utility>
+#include <dirent.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -67,19 +69,44 @@ std::string fingerprint(const std::vector<unsigned char>& key) {
     auto d = sha256str(std::string(key.begin(), key.end()));
     return hexs(d.data(), 4);
 }
-// один шаг цепочки: (next_ck, msg_key)
 std::pair<std::vector<unsigned char>, std::vector<unsigned char>> step(const std::vector<unsigned char>& ck, long n) {
     std::string base = "ratchet:" + std::to_string(n);
     auto next = hmac256(ck, base + char(1));
     auto mk   = hmac256(ck, base + char(2));
     return { next, mk };
 }
-// инициализация цепочек из root-секрета
 Session makeSession(const std::string& sharedHex) {
     auto root = sha256str(sharedHex);
     auto ck0 = hmac256(root, "chain-init");
     Session s; s.send_ck = ck0; s.recv_ck = ck0; return s;
 }
+// ---- PERSISTENT RATCHET ----
+std::string sessionPath(const std::string& peer) { return "ratchet_" + peer + ".dat"; }
+void saveSession(const std::string& peer, const Session& s) {
+    std::ofstream f(sessionPath(peer));
+    f << hexs(s.send_ck.data(), s.send_ck.size()) << " "
+      << hexs(s.recv_ck.data(), s.recv_ck.size()) << " "
+      << s.send_n << " " << s.recv_n << "\n";
+}
+void loadAllSessions() {
+    DIR* d = opendir("."); if (!d) return;
+    struct dirent* e;
+    while ((e = readdir(d))) {
+        std::string nm = e->d_name;
+        if (nm.rfind("ratchet_", 0) == 0 && nm.size() > 12 &&
+            nm.compare(nm.size() - 4, 4, ".dat") == 0) {
+            std::string peer = nm.substr(8, nm.size() - 12);
+            std::ifstream f(nm);
+            std::string a, b; long sn, rn;
+            if (f >> a >> b >> sn >> rn) {
+                Session s; s.send_ck = unhexs(a); s.recv_ck = unhexs(b);
+                s.send_n = sn; s.recv_n = rn; sessions[peer] = s;
+            }
+        }
+    }
+    closedir(d);
+}
+// ----------------------------
 std::string enc(const std::vector<unsigned char>& key, const std::string& text) {
     unsigned char nonce[12]; RAND_bytes(nonce, 12);
     std::vector<unsigned char> out(text.size() + 64);
@@ -141,9 +168,10 @@ void handleDHREQ(const std::string& from, const std::string& pHex, const std::st
     BN_mod_exp(shared, A, b, p, ctx);
     std::string sharedHex = bn2hex(shared);
     sessions[from] = makeSession(sharedHex);
+    saveSession(from, sessions[from]);
     std::string Bhex = bn2hex(B);
     sendLine("@" + from + " DHRES " + myName + " " + Bhex);
-    std::cout << "🔐 ratchet-сессия с " << from << ", отпечаток: " << fingerprint(sharedHex.size() ? sha256str(sharedHex) : std::vector<unsigned char>()) << "\n";
+    std::cout << "🔐 ratchet-сессия с " << from << ", отпечаток: " << fingerprint(sha256str(sharedHex)) << "\n";
     BN_free(p); BN_free(g); BN_free(A); BN_free(b); BN_free(B); BN_free(shared); BN_CTX_free(ctx);
 }
 void handleDHRES(const std::string& from, const std::string& BHex) {
@@ -153,11 +181,11 @@ void handleDHRES(const std::string& from, const std::string& BHex) {
     BN_mod_exp(shared, B, a, p, ctx);
     std::string sharedHex = bn2hex(shared);
     sessions[from] = makeSession(sharedHex);
+    saveSession(from, sessions[from]);
     std::cout << "🔐 ratchet-сессия с " << from << ", отпечаток: " << fingerprint(sha256str(sharedHex)) << "\n";
     pendingA.erase(from); pendingP.erase(from);
     BN_free(p); BN_free(B); BN_free(a); BN_free(shared); BN_CTX_free(ctx);
 }
-// расшифровка DM с прокруткой recv-цепочки до шага target
 bool decryptDM(Session& s, long target, const std::string& ct, std::string& out) {
     if (target <= s.recv_n) return false;
     std::vector<unsigned char> mk;
@@ -195,8 +223,9 @@ void receiver() {
                 auto it = sessions.find(from);
                 if (it == sessions.end()) { std::cout << "🔒 нет сессии с " << from << "\n"; continue; }
                 std::string d;
-                if (!decryptDM(it->second, atol(nStr.c_str()), ct, d))
-                    std::cout << "🔒 рассинхрон цепочки с " << from << " — сделай /reset " << from << "\n";
+                bool ok = decryptDM(it->second, atol(nStr.c_str()), ct, d);
+                saveSession(from, it->second);   // фиксируем прокрутку (даже при рассинхроне)
+                if (!ok) std::cout << "🔒 рассинхрон цепочки с " << from << " — /reset " << from << "\n";
                 else show(d);
             } else if (line.rfind("===", 0) == 0) {
                 std::cout << line << "\n";
@@ -214,6 +243,8 @@ int main(int argc, char* argv[]) {
     std::cout << "Твоё имя: "; std::getline(std::cin, myName);
     if (myName.empty()) myName = "Аноним";
 
+    loadAllSessions();   // <-- цепочки переживают рестарт
+
     sock = socket(AF_INET, SOCK_STREAM, 0);
     sockaddr_in addr{};
     addr.sin_family = AF_INET; addr.sin_port = htons(PORT);
@@ -223,7 +254,7 @@ int main(int argc, char* argv[]) {
     sendLine("REG " + myName);
     std::thread(receiver).detach();
 
-    std::cout << "Команды: /dm ИМЯ (ОДИН раз), /group, /reset ИМЯ, /exit. Лички = forward secrecy (ratchet).\n";
+    std::cout << "Команды: /dm ИМЯ, /group, /reset ИМЯ, /exit. Лички = persistent forward secrecy.\n";
     std::string input;
     while (true) {
         std::getline(std::cin, input);
@@ -233,14 +264,15 @@ int main(int argc, char* argv[]) {
         if (input.rfind("/reset ", 0) == 0) {
             std::string peer = input.substr(7);
             sessions.erase(peer); pendingA.erase(peer); pendingP.erase(peer);
+            remove(sessionPath(peer).c_str());
             if (currentPeer == peer) currentPeer = "";
-            std::cout << "сессия с " << peer << " сброшена\n";
+            std::cout << "сессия с " << peer << " сброшена (файл удалён)\n";
             continue;
         }
         if (input.rfind("/dm ", 0) == 0) {
             std::string peer = input.substr(4);
-            if (sessions.count(peer)) { currentPeer = peer; std::cout << "сессия с " << peer << " уже активна\n"; continue; }
-            if (pendingA.count(peer)) { currentPeer = peer; std::cout << "запрос " << peer << " уже в полёте\n"; continue; }
+            if (sessions.count(peer)) { currentPeer = peer; std::cout << "сессия с " << peer << " уже активна (с диска)\n"; continue; }
+            pendingA.erase(peer); pendingP.erase(peer);   // сбрасываем зависший запрос
             currentPeer = peer;
             BN_CTX* ctx = BN_CTX_new();
             BIGNUM *p = BN_new(), *g = BN_new(), *a = BN_new(), *A = BN_new();
@@ -264,6 +296,7 @@ int main(int argc, char* argv[]) {
             s.send_ck = pr.first;
             std::string ct = enc(pr.second, body);
             sendLine("@" + currentPeer + " DM " + myName + " " + std::to_string(s.send_n) + " " + ct);
+            saveSession(currentPeer, s);
             show(body);
         } else {
             std::string ct = enc(groupKey(), body);
