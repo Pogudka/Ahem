@@ -1,17 +1,21 @@
 package com.example.messenger
 
 import android.app.Activity
-import android.app.AlertDialog
+import android.app.Dialog
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
 import android.util.Base64
-import android.view.View
+import android.view.GestureDetector
 import android.view.Gravity
+import android.view.MotionEvent
+import android.view.ScaleGestureDetector
+import android.view.View
 import android.widget.*
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -76,34 +80,67 @@ object Crypto {
     }
 }
 
+// ====== ЛЕНТА: байтовое буферизированное чтение + UTF-8 (чинит 5мин/mojibake/лайки/вылет) ======
 object FeedApi {
-    private fun readLine(acc: StringBuilder, ins: java.io.InputStream): String? {
+    private const val BUFSZ = 65536
+    private fun drain(acc: ByteArrayOutputStream, ins: java.io.InputStream, needNewline: Boolean): Boolean {
+        // читает блоками; возвращает false при eof. Если needNewline - останавливается после первого '\n' в acc.
+        val chunk = ByteArray(BUFSZ)
         while (true) {
-            val nl = acc.indexOf("\n")
-            if (nl >= 0) { val r = acc.substring(0, nl); acc.delete(0, nl + 1); return r }
-            val b = ins.read(); if (b == -1) return null; acc.append(b.toChar())
+            val n = ins.read(chunk)
+            if (n <= 0) return false
+            acc.write(chunk, 0, n)
+            if (needNewline && acc.toByteArray().indexOf(10.toByte()) >= 0) return true
         }
+    }
+    private fun firstLine(acc: ByteArrayOutputStream): String {
+        val b = acc.toByteArray()
+        val nl = b.indexOf(10.toByte())
+        val end = if (nl >= 0) nl else b.size
+        return String(b, 0, end, Charsets.UTF_8)
+    }
+    private fun allLines(acc: ByteArrayOutputStream): List<String> {
+        val b = acc.toByteArray()
+        val out = ArrayList<String>()
+        var start = 0
+        for (i in b.indices) if (b[i] == 10.toByte()) {
+            out.add(String(b, start, i - start, Charsets.UTF_8)); start = i + 1
+        }
+        if (start < b.size) out.add(String(b, start, b.size - start, Charsets.UTF_8))
+        return out
     }
     private fun ask(ip: String, req: String): String {
         var s: Socket? = null
         try {
             s = Socket(ip, FEED_PORT)
-            s.getOutputStream().write((req + "\n").toByteArray()); s.getOutputStream().flush()
-            val acc = StringBuilder(); return readLine(acc, s.getInputStream()) ?: "ERR|eof"
+            s.soTimeout = 15000
+            s.getOutputStream().write((req + "\n").toByteArray(Charsets.UTF_8)); s.getOutputStream().flush()
+            val acc = ByteArrayOutputStream()
+            drain(acc, s.getInputStream(), true)
+            return firstLine(acc).ifEmpty { "ERR|eof" }
         } catch (e: Exception) { return "ERR|connect" }
         finally { try { s?.close() } catch (_: Exception) {} }
     }
     private fun askMulti(ip: String, req: String): List<String> {
         var s: Socket? = null
-        val out = ArrayList<String>()
         try {
             s = Socket(ip, FEED_PORT)
-            s.getOutputStream().write((req + "\n").toByteArray()); s.getOutputStream().flush()
-            val acc = StringBuilder()
-            while (true) { val l = readLine(acc, s.getInputStream()) ?: break; if (l == "END") break; out.add(l) }
-        } catch (e: Exception) { }
+            s.soTimeout = 30000
+            s.getOutputStream().write((req + "\n").toByteArray(Charsets.UTF_8)); s.getOutputStream().flush()
+            val ins = s.getInputStream()
+            val acc = ByteArrayOutputStream()
+            val res = ArrayList<String>()
+            while (true) {
+                if (!drain(acc, ins, true)) break
+                val lines = allLines(acc)
+                acc.reset()
+                var stop = false
+                for (l in lines) { if (l == "END") { stop = true; break }; if (l.isNotEmpty()) res.add(l) }
+                if (stop) break
+            }
+            return res
+        } catch (e: Exception) { return emptyList() }
         finally { try { s?.close() } catch (_: Exception) {} }
-        return out
     }
     fun register(ip: String, email: String, nick: String, pass: String) = ask(ip, "REG|$email|$nick|$pass")
     fun login(ip: String, email: String, pass: String) = ask(ip, "LOGIN|$email|$pass")
@@ -116,11 +153,11 @@ object FeedApi {
 class MainActivity : Activity() {
     private val handler = Handler(Looper.getMainLooper())
     private lateinit var prefs: android.content.SharedPreferences
+    @Volatile private var feedBusy = false
 
     private lateinit var tabs: Array<View>
     private lateinit var tabBtns: Array<Button>
 
-    // лента
     private lateinit var authBlock: LinearLayout
     private lateinit var feedBlock: LinearLayout
     private lateinit var feedHeader: TextView
@@ -139,7 +176,6 @@ class MainActivity : Activity() {
     private var feedLoggedNick = ""
     private val pendingImages = ArrayList<String>()
 
-    // чат
     private lateinit var chatBox: LinearLayout
     private lateinit var chatScroll: ScrollView
     private lateinit var ipField: EditText
@@ -170,6 +206,18 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // страховка: пишем stacktrace вылета в crash.txt, чтобы диагностировать без adb
+        val prev = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { t, e ->
+            try {
+                val sw = java.io.PrintWriter(File(filesDir, "crash.txt"))
+                e.printStackTrace(sw); sw.close()
+            } catch (_: Exception) {}
+            handler.post { Toast.makeText(this, "сбой записан в crash.txt", Toast.LENGTH_LONG).show() }
+            try { Thread.sleep(800) } catch (_: Exception) {}
+            prev?.uncaughtException(t, e)
+        }
+
         prefs = getSharedPreferences("lud", MODE_PRIVATE)
         loadAllSessions()
 
@@ -203,7 +251,6 @@ class MainActivity : Activity() {
         if (i == 3) refreshProfile()
     }
 
-    // ---------- декод с downsampling ----------
     private fun decodeSampled(bytes: ByteArray, reqW: Int): Bitmap? {
         val o = BitmapFactory.Options(); o.inJustDecodeBounds = true
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, o)
@@ -306,10 +353,7 @@ class MainActivity : Activity() {
         }
         switchBtn.setOnClickListener { exitFeedMode() }
         clearBtn.setOnClickListener { pendingImages.clear(); renderPending() }
-        phBtn.setOnClickListener {
-            if (feedId.isEmpty()) return@setOnClickListener
-            photoTarget = "feed"; pickImages()
-        }
+        phBtn.setOnClickListener { if (feedId.isEmpty()) return@setOnClickListener else { photoTarget = "feed"; pickImages() } }
         pubBtn.setOnClickListener {
             if (feedId.isEmpty()) return@setOnClickListener
             val body = feedPostText.text.toString().replace("|", "/")
@@ -318,7 +362,7 @@ class MainActivity : Activity() {
             Thread { FeedApi.post(host(), feedId, body, img); handler.post { pendingImages.clear(); renderPending(); refreshFeedAsync() } }.start()
             feedPostText.setText("")
         }
-        feedBtn.setOnClickListener { if (feedId.isNotEmpty()) refreshFeedAsync() }
+        feedBtn.setOnClickListener { refreshFeedAsync() }
         folBtn.setOnClickListener {
             if (feedId.isEmpty()) return@setOnClickListener
             val n = feedFollowNick.text.toString(); if (n.isEmpty()) return@setOnClickListener
@@ -354,12 +398,21 @@ class MainActivity : Activity() {
         }
     }
     private fun refreshFeedAsync() {
-        if (feedId.isEmpty()) return
-        Thread { val lines = FeedApi.feed(host(), feedId); handler.post { renderFeed(lines) } }.start()
+        if (feedId.isEmpty() || feedBusy) return
+        feedBusy = true
+        Thread {
+            try {
+                val lines = FeedApi.feed(host(), feedId)
+                handler.post { renderFeed(lines); feedBusy = false }
+            } catch (e: Exception) { handler.post { feedBusy = false } }
+        }.start()
     }
     private fun renderFeed(lines: List<String>) {
         feedBox.removeAllViews(); var any = false
-        for (ln in lines) if (ln.startsWith("P|")) { try { addPostCard(ln) } catch (e: Exception) { val tv = TextView(this); tv.text = "🔒 пост повреждён (len=${ln.length})"; feedBox.addView(tv) }; any = true }
+        for (ln in lines) if (ln.startsWith("P|")) {
+            try { addPostCard(ln) } catch (e: Exception) { val tv = TextView(this); tv.text = "🔒 пост повреждён (len=${ln.length})"; feedBox.addView(tv) }
+            any = true
+        }
         if (!any) { val tv = TextView(this); tv.text = "лента пуста (или нет связи) — подпишись / напиши пост"; feedBox.addView(tv) }
         feedScroll.post { feedScroll.fullScroll(View.FOCUS_DOWN) }
     }
@@ -405,29 +458,86 @@ class MainActivity : Activity() {
         feedBox.addView(card)
     }
 
-    // ---------- полноэкранный просмотрщик ----------
+    // ====== ПРОСМОТРЩИК: чёрный фон, «←» сверху слева, pinch-zoom до 1:1 пикселей фото ======
     private fun openViewer(images: List<String>, start: Int) {
         if (images.isEmpty()) return
-        val wrap = LinearLayout(this); wrap.orientation = LinearLayout.VERTICAL; wrap.setPadding(8, 8, 8, 8)
-        val img = ImageView(this); img.scaleType = ImageView.ScaleType.FIT_CENTER
-        img.layoutParams = lp(-1, 0, 0); wt(img, 1f)
+        val dlg = Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen)
+        val frame = FrameLayout(this); frame.setBackgroundColor(0xFF000000.toInt())
+        val img = ImageView(this); img.scaleType = ImageView.ScaleType.MATRIX
+        frame.addView(img, FrameLayout.LayoutParams(-1, -1))
+
+        val back = TextView(this); back.text = "←"; back.setTextColor(0xFFFFFFFF.toInt())
+        back.textSize = 28f; back.setPadding(dp(16), dp(10), dp(16), dp(10))
+        back.setBackgroundColor(0x66000000)
+        val blp = FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT)
+        blp.gravity = Gravity.TOP or Gravity.START; frame.addView(back, blp)
+        back.setOnClickListener { dlg.dismiss() }
+
         val bar = LinearLayout(this); bar.orientation = LinearLayout.HORIZONTAL
-        val prev = Button(this); prev.text = "◀"; prev.layoutParams = lp(0, -2, 0); wt(prev, 1f)
-        val cnt = TextView(this); cnt.gravity = Gravity.CENTER; cnt.layoutParams = lp(0, -2, 0); wt(cnt, 2f)
-        val next = Button(this); next.text = "▶"; next.layoutParams = lp(0, -2, 0); wt(next, 1f)
-        bar.addView(prev); bar.addView(cnt); bar.addView(next)
-        wrap.addView(img); wrap.addView(bar)
+        bar.setBackgroundColor(0x66000000)
+        val prevB = Button(this); prevB.text = "◀"; prevB.setTextColor(0xFFFFFFFF.toInt()); prevB.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0); wt(prevB, 1f)
+        val cnt = TextView(this); cnt.setTextColor(0xFFFFFFFF.toInt()); cnt.gravity = Gravity.CENTER; cnt.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0); wt(cnt, 2f)
+        val nextB = Button(this); nextB.text = "▶"; nextB.setTextColor(0xFFFFFFFF.toInt()); nextB.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0); wt(nextB, 1f)
+        bar.addView(prevB); bar.addView(cnt); bar.addView(nextB)
+        val brp = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT)
+        brp.gravity = Gravity.BOTTOM; frame.addView(bar, brp)
+
+        dlg.setContentView(frame)
+        dlg.show()
 
         var idx = start.coerceIn(0, images.size - 1)
-        fun show() {
-            try { val bmp = decodeB64(images[idx], FEED_MAX_W); if (bmp != null) img.setImageBitmap(bmp) } catch (e: Exception) { }
-            cnt.text = "${idx + 1} / ${images.size}"
-            prev.isEnabled = idx > 0; next.isEnabled = idx < images.size - 1
+        var bmp: Bitmap? = null
+        var scale = 1f; var minS = 1f; var maxS = 1f; var panX = 0f; var panY = 0f
+
+        fun clampPan(vw: Int, vh: Int) {
+            if (bmp == null) return
+            val bw = (bmp!!.width * scale); val bh = (bmp!!.height * scale)
+            val mx = maxOf(0f, (bw - vw) / 2f); val my = maxOf(0f, (bh - vh) / 2f)
+            panX = panX.coerceIn(-mx, mx); panY = panY.coerceIn(-my, my)
         }
-        prev.setOnClickListener { if (idx > 0) { idx--; show() } }
-        next.setOnClickListener { if (idx < images.size - 1) { idx++; show() } }
+        fun apply() {
+            val b = bmp ?: return; val vw = img.width; val vh = img.height
+            if (vw == 0 || vh == 0) return
+            clampPan(vw, vh)
+            val m = Matrix()
+            m.postScale(scale, scale)
+            m.postTranslate((vw - b.width * scale) / 2f + panX, (vh - b.height * scale) / 2f + panY)
+            img.imageMatrix = m
+        }
+        fun setup(b: Bitmap) {
+            bmp = b; val vw = img.width; val vh = img.height
+            if (vw == 0 || vh == 0) { img.post { setup(b) }; return }
+            val fit = minOf(vw.toFloat() / b.width, vh.toFloat() / b.height)
+            if (fit >= 1f) { minS = 1f; maxS = 1f; scale = 1f }   // маленькое фото: показ 1:1, зум выкл
+            else { minS = fit; maxS = 1f; scale = fit }            // крупное: от вписывания до 1:1 пикселя
+            panX = 0f; panY = 0f; apply()
+        }
+        fun show() {
+            val bb = decodeB64(images[idx], FEED_MAX_W)
+            if (bb != null) { img.setImageBitmap(bb); img.post { setup(bb) } }
+            cnt.text = "${idx + 1} / ${images.size}"
+            prevB.isEnabled = idx > 0; nextB.isEnabled = idx < images.size - 1
+        }
+        prevB.setOnClickListener { if (idx > 0) { idx--; show() } }
+        nextB.setOnClickListener { if (idx < images.size - 1) { idx++; show() } }
+
+        val sgd = ScaleGestureDetector(this, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+            override fun onScale(d: ScaleGestureDetector): Boolean {
+                if (maxS <= minS) return true
+                scale = (scale * d.scaleFactor).coerceIn(minS, maxS)
+                apply(); return true
+            }
+        })
+        val gd = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
+            override fun onDown(e: MotionEvent) = true
+            override fun onScroll(e1: MotionEvent, e2: MotionEvent, dx: Float, dy: Float): Boolean {
+                if (scale > minS + 0.001f) { panX -= dx; panY -= dy; apply() }
+                return true
+            }
+        })
+        img.setOnTouchListener { _, ev -> sgd.onTouchEvent(ev); gd.onTouchEvent(ev); true }
+
         show()
-        AlertDialog.Builder(this).setView(wrap).setOnDismissListener { }.show()
     }
 
     // ================= ВИДЕО =================
@@ -490,7 +600,7 @@ class MainActivity : Activity() {
                     val s = Socket(ip, CHAT_PORT); socket = s; out = s.getOutputStream()
                     sendLine("REG $n"); addTextLine("=== подключено ===")
                     val b = ByteArray(8192)
-                    while (true) { val nn = s.getInputStream().read(b); if (nn <= 0) break; handler.post { addText(String(b, 0, nn)) } }
+                    while (true) { val nn = s.getInputStream().read(b); if (nn <= 0) break; handler.post { addText(String(b, 0, nn, Charsets.UTF_8)) } }
                     out = null; socket = null; addTextLine("=== оффлайн ===")
                 } catch (e: Exception) { out = null; socket = null; addTextLine("=== ошибка: " + e.message + " ===") }
             }.start()
