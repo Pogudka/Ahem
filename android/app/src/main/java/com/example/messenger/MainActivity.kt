@@ -36,6 +36,7 @@ const val CHAT_PORT = 9999
 const val FEED_PORT = 8080
 const val FEED_MAX_W = 1024
 const val FEED_QUALITY = 80
+const val ZOOM_MAX = 3f
 
 class Session(var sendCk: ByteArray, var recvCk: ByteArray, var sendN: Long = 0, var recvN: Long = 0)
 
@@ -85,36 +86,27 @@ object FeedApi {
     private fun drain(acc: ByteArrayOutputStream, ins: java.io.InputStream, needNewline: Boolean): Boolean {
         val chunk = ByteArray(BUFSZ)
         while (true) {
-            val n = ins.read(chunk)
-            if (n <= 0) return false
+            val n = ins.read(chunk); if (n <= 0) return false
             acc.write(chunk, 0, n)
             if (needNewline && acc.toByteArray().indexOf(10.toByte()) >= 0) return true
         }
     }
     private fun firstLine(acc: ByteArrayOutputStream): String {
-        val b = acc.toByteArray()
-        val nl = b.indexOf(10.toByte())
-        val end = if (nl >= 0) nl else b.size
+        val b = acc.toByteArray(); val nl = b.indexOf(10.toByte()); val end = if (nl >= 0) nl else b.size
         return String(b, 0, end, Charsets.UTF_8)
     }
     private fun allLines(acc: ByteArrayOutputStream): List<String> {
-        val b = acc.toByteArray()
-        val out = ArrayList<String>()
-        var start = 0
-        for (i in b.indices) if (b[i] == 10.toByte()) {
-            out.add(String(b, start, i - start, Charsets.UTF_8)); start = i + 1
-        }
+        val b = acc.toByteArray(); val out = ArrayList<String>(); var start = 0
+        for (i in b.indices) if (b[i] == 10.toByte()) { out.add(String(b, start, i - start, Charsets.UTF_8)); start = i + 1 }
         if (start < b.size) out.add(String(b, start, b.size - start, Charsets.UTF_8))
         return out
     }
     private fun ask(ip: String, req: String): String {
         var s: Socket? = null
         try {
-            s = Socket(ip, FEED_PORT)
-            s.soTimeout = 15000
+            s = Socket(ip, FEED_PORT); s.soTimeout = 15000
             s.getOutputStream().write((req + "\n").toByteArray(Charsets.UTF_8)); s.getOutputStream().flush()
-            val acc = ByteArrayOutputStream()
-            drain(acc, s.getInputStream(), true)
+            val acc = ByteArrayOutputStream(); drain(acc, s.getInputStream(), true)
             return firstLine(acc).ifEmpty { "ERR|eof" }
         } catch (e: Exception) { return "ERR|connect" }
         finally { try { s?.close() } catch (_: Exception) {} }
@@ -122,17 +114,12 @@ object FeedApi {
     private fun askMulti(ip: String, req: String): List<String> {
         var s: Socket? = null
         try {
-            s = Socket(ip, FEED_PORT)
-            s.soTimeout = 30000
+            s = Socket(ip, FEED_PORT); s.soTimeout = 30000
             s.getOutputStream().write((req + "\n").toByteArray(Charsets.UTF_8)); s.getOutputStream().flush()
-            val ins = s.getInputStream()
-            val acc = ByteArrayOutputStream()
-            val res = ArrayList<String>()
+            val ins = s.getInputStream(); val acc = ByteArrayOutputStream(); val res = ArrayList<String>()
             while (true) {
                 if (!drain(acc, ins, true)) break
-                val lines = allLines(acc)
-                acc.reset()
-                var stop = false
+                val lines = allLines(acc); acc.reset(); var stop = false
                 for (l in lines) { if (l == "END") { stop = true; break }; if (l.isNotEmpty()) res.add(l) }
                 if (stop) break
             }
@@ -178,6 +165,7 @@ class MainActivity : Activity() {
     private lateinit var chatScroll: ScrollView
     private lateinit var ipField: EditText
     private lateinit var nameField: EditText
+    private lateinit var peerPick: Spinner
     private lateinit var peerField: EditText
     private lateinit var msgField: EditText
     @Volatile private var out: java.io.OutputStream? = null
@@ -187,6 +175,8 @@ class MainActivity : Activity() {
     private val pendingA = mutableMapOf<String, BigInteger>()
     private val pendingP = mutableMapOf<String, BigInteger>()
     private var currentPeer = ""
+    private val knownNames = LinkedHashSet<String>()
+    private lateinit var peerAdapter: ArrayAdapter<String>
 
     private lateinit var profileText: TextView
     private val PICK_IMAGE = 1001
@@ -195,21 +185,31 @@ class MainActivity : Activity() {
 
     private fun now() = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
-    private fun me() = nameField.text.toString().ifEmpty { "Аноним" }
+    private fun me() = nameField.text.toString().ifEmpty { feedLoggedNick.ifEmpty { "Аноним" } }
     private fun host() = ipField.text.toString().ifEmpty { "127.0.0.1" }
     private fun lp(w: Int, h: Int, margin: Int = 0): LinearLayout.LayoutParams {
         val p = LinearLayout.LayoutParams(w, h); p.bottomMargin = margin; return p
     }
     private fun wt(v: View, w: Float) { (v.layoutParams as LinearLayout.LayoutParams).weight = w }
 
+    private fun addKnown(n: String) {
+        if (n.isEmpty() || n == me()) return
+        if (knownNames.add(n)) {
+            prefs.edit().putStringSet("known_names", HashSet(knownNames)).apply()
+            refreshPeerAdapter()
+        }
+    }
+    private fun refreshPeerAdapter() {
+        if (!::peerAdapter.isInitialized) return
+        val list = ArrayList(knownNames)
+        peerAdapter.clear(); peerAdapter.addAll(list); peerAdapter.notifyDataSetChanged()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val prev = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { t, e ->
-            try {
-                val sw = java.io.PrintWriter(File(filesDir, "crash.txt"))
-                e.printStackTrace(sw); sw.close()
-            } catch (_: Exception) {}
+            try { val sw = java.io.PrintWriter(File(filesDir, "crash.txt")); e.printStackTrace(sw); sw.close() } catch (_: Exception) {}
             handler.post { Toast.makeText(this, "сбой записан в crash.txt", Toast.LENGTH_LONG).show() }
             try { Thread.sleep(800) } catch (_: Exception) {}
             prev?.uncaughtException(t, e)
@@ -217,6 +217,7 @@ class MainActivity : Activity() {
 
         prefs = getSharedPreferences("lud", MODE_PRIVATE)
         loadAllSessions()
+        prefs.getStringSet("known_names", null)?.let { knownNames.addAll(it) }
 
         val root = LinearLayout(this); root.orientation = LinearLayout.VERTICAL
         val content = FrameLayout(this); content.layoutParams = lp(-1, 0, 0); wt(content, 1f)
@@ -240,6 +241,28 @@ class MainActivity : Activity() {
         root.addView(content); root.addView(panel)
         setContentView(root)
         showTab(0)
+
+        // АВТОВХОД в ленту по сохранённым данным (чтобы не тыкать "Вход" каждый раз)
+        val ae = prefs.getString("feed_email", ""); val ap = prefs.getString("feed_pass", "")
+        if (ae.isNotEmpty() && ap.isNotEmpty()) {
+            Thread {
+                val r = FeedApi.login(host(), ae, ap)
+                handler.post {
+                    if (r.startsWith("OK|")) {
+                        val parts = r.split("|"); feedId = parts[1]; feedLoggedNick = if (parts.size > 2) parts[2] else "?"
+                        applyFeedNickToChat()
+                        enterFeedMode()
+                    }
+                }
+            }.start()
+        }
+    }
+
+    private fun applyFeedNickToChat() {
+        if (feedLoggedNick.isEmpty()) return
+        if (::nameField.isInitialized && nameField.text.toString().isEmpty()) nameField.setText(feedLoggedNick)
+        prefs.edit().putString("chat_name", feedLoggedNick).apply()
+        addKnown(feedLoggedNick)
     }
 
     private fun showTab(i: Int) {
@@ -252,8 +275,7 @@ class MainActivity : Activity() {
         val o = BitmapFactory.Options(); o.inJustDecodeBounds = true
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, o)
         if (o.outWidth <= 0) return null
-        var s = 1
-        while (o.outWidth / s / 2 >= reqW) s *= 2
+        var s = 1; while (o.outWidth / s / 2 >= reqW) s *= 2
         val o2 = BitmapFactory.Options(); o2.inSampleSize = s
         return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, o2)
     }
@@ -280,7 +302,7 @@ class MainActivity : Activity() {
         authBlock = LinearLayout(this); authBlock.orientation = LinearLayout.VERTICAL
         feedEmail = EditText(this); feedEmail.hint = "email (логин ленты)"; feedEmail.setText(prefs.getString("feed_email", ""))
         feedNick = EditText(this); feedNick.hint = "ник"; feedNick.setText(prefs.getString("feed_nick", ""))
-        feedPass = EditText(this); feedPass.hint = "пароль"; feedPass.inputType = 1
+        feedPass = EditText(this); feedPass.hint = "пароль"; feedPass.inputType = 1; feedPass.setText(prefs.getString("feed_pass", ""))
         val rowAuth = LinearLayout(this); rowAuth.orientation = LinearLayout.HORIZONTAL
         val regBtn = Button(this); regBtn.text = "Регистрация"; regBtn.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0); wt(regBtn, 1f)
         val logBtn = Button(this); logBtn.text = "Вход"; logBtn.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0); wt(logBtn, 1f)
@@ -328,8 +350,8 @@ class MainActivity : Activity() {
                 handler.post {
                     if (r.startsWith("OK|")) {
                         feedId = r.substring(3); feedLoggedNick = n
-                        prefs.edit().putString("feed_email", e).putString("feed_nick", n).apply()
-                        enterFeedMode()
+                        prefs.edit().putString("feed_email", e).putString("feed_nick", n).putString("feed_pass", pw).apply()
+                        applyFeedNickToChat(); enterFeedMode()
                     } else feedStatus.text = if (r == "ERR|connect") "нет связи с сервером" else "ошибка: $r"
                 }
             }.start()
@@ -342,8 +364,8 @@ class MainActivity : Activity() {
                 handler.post {
                     if (r.startsWith("OK|")) {
                         val parts = r.split("|"); feedId = parts[1]; feedLoggedNick = if (parts.size > 2) parts[2] else "?"
-                        prefs.edit().putString("feed_email", e).putString("feed_nick", feedLoggedNick).apply()
-                        enterFeedMode()
+                        prefs.edit().putString("feed_email", e).putString("feed_nick", feedLoggedNick).putString("feed_pass", pw).apply()
+                        applyFeedNickToChat(); enterFeedMode()
                     } else feedStatus.text = if (r == "ERR|connect") "нет связи с сервером" else "ошибка: $r"
                 }
             }.start()
@@ -363,7 +385,7 @@ class MainActivity : Activity() {
         folBtn.setOnClickListener {
             if (feedId.isEmpty()) return@setOnClickListener
             val n = feedFollowNick.text.toString(); if (n.isEmpty()) return@setOnClickListener
-            Thread { FeedApi.follow(host(), n, feedId); handler.post { refreshFeedAsync() } }.start()
+            Thread { FeedApi.follow(host(), n, feedId); handler.post { addKnown(n); refreshFeedAsync() } }.start()
             feedFollowNick.setText("")
         }
 
@@ -398,10 +420,8 @@ class MainActivity : Activity() {
         if (feedId.isEmpty() || feedBusy) return
         feedBusy = true
         Thread {
-            try {
-                val lines = FeedApi.feed(host(), feedId)
-                handler.post { renderFeed(lines); feedBusy = false }
-            } catch (e: Exception) { handler.post { feedBusy = false } }
+            try { val lines = FeedApi.feed(host(), feedId); handler.post { renderFeed(lines); feedBusy = false } }
+            catch (e: Exception) { handler.post { feedBusy = false } }
         }.start()
     }
     private fun renderFeed(lines: List<String>) {
@@ -448,14 +468,14 @@ class MainActivity : Activity() {
         row.addView(likeBtn)
         if (postNick != feedLoggedNick) {
             val fb = Button(this); fb.text = "+ @$postNick"; fb.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0); wt(fb, 2f)
-            fb.setOnClickListener { if (feedId.isNotEmpty()) Thread { FeedApi.follow(host(), postNick, feedId); handler.post { refreshFeedAsync() } }.start() }
+            fb.setOnClickListener { if (feedId.isNotEmpty()) Thread { FeedApi.follow(host(), postNick, feedId); handler.post { addKnown(postNick); refreshFeedAsync() } }.start() }
             row.addView(fb)
         }
         card.addView(row)
         feedBox.addView(card)
     }
 
-    // ====== ПРОСМОТРЩИК: чёрный фон, «←» сверху слева, pinch-zoom до 1:1 пикселей фото ======
+    // ====== ПРОСМОТРЩИК: чёрный фон, «←» сверху слева, зум до 3× ======
     private fun openViewer(images: List<String>, start: Int) {
         if (images.isEmpty()) return
         val dlg = Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen)
@@ -464,14 +484,12 @@ class MainActivity : Activity() {
         frame.addView(img, FrameLayout.LayoutParams(-1, -1))
 
         val back = TextView(this); back.text = "←"; back.setTextColor(0xFFFFFFFF.toInt())
-        back.textSize = 28f; back.setPadding(dp(16), dp(10), dp(16), dp(10))
-        back.setBackgroundColor(0x66000000)
+        back.textSize = 28f; back.setPadding(dp(16), dp(10), dp(16), dp(10)); back.setBackgroundColor(0x66000000)
         val blp = FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT)
         blp.gravity = Gravity.TOP or Gravity.START; frame.addView(back, blp)
         back.setOnClickListener { dlg.dismiss() }
 
-        val bar = LinearLayout(this); bar.orientation = LinearLayout.HORIZONTAL
-        bar.setBackgroundColor(0x66000000)
+        val bar = LinearLayout(this); bar.orientation = LinearLayout.HORIZONTAL; bar.setBackgroundColor(0x66000000)
         val prevB = Button(this); prevB.text = "◀"; prevB.setTextColor(0xFFFFFFFF.toInt()); prevB.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0); wt(prevB, 1f)
         val cnt = TextView(this); cnt.setTextColor(0xFFFFFFFF.toInt()); cnt.gravity = Gravity.CENTER; cnt.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0); wt(cnt, 2f)
         val nextB = Button(this); nextB.text = "▶"; nextB.setTextColor(0xFFFFFFFF.toInt()); nextB.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0); wt(nextB, 1f)
@@ -479,16 +497,15 @@ class MainActivity : Activity() {
         val brp = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT)
         brp.gravity = Gravity.BOTTOM; frame.addView(bar, brp)
 
-        dlg.setContentView(frame)
-        dlg.show()
+        dlg.setContentView(frame); dlg.show()
 
         var idx = start.coerceIn(0, images.size - 1)
         var bmp: Bitmap? = null
-        var scale = 1f; var minS = 1f; var maxS = 1f; var panX = 0f; var panY = 0f
+        var scale = 1f; var minS = 1f; var maxS = ZOOM_MAX; var panX = 0f; var panY = 0f
 
         fun clampPan(vw: Int, vh: Int) {
             if (bmp == null) return
-            val bw = (bmp!!.width * scale); val bh = (bmp!!.height * scale)
+            val bw = bmp!!.width * scale; val bh = bmp!!.height * scale
             val mx = maxOf(0f, (bw - vw) / 2f); val my = maxOf(0f, (bh - vh) / 2f)
             panX = panX.coerceIn(-mx, mx); panY = panY.coerceIn(-my, my)
         }
@@ -496,8 +513,7 @@ class MainActivity : Activity() {
             val b = bmp ?: return; val vw = img.width; val vh = img.height
             if (vw == 0 || vh == 0) return
             clampPan(vw, vh)
-            val m = Matrix()
-            m.postScale(scale, scale)
+            val m = Matrix(); m.postScale(scale, scale)
             m.postTranslate((vw - b.width * scale) / 2f + panX, (vh - b.height * scale) / 2f + panY)
             img.imageMatrix = m
         }
@@ -505,8 +521,7 @@ class MainActivity : Activity() {
             bmp = b; val vw = img.width; val vh = img.height
             if (vw == 0 || vh == 0) { img.post { setup(b) }; return }
             val fit = minOf(vw.toFloat() / b.width, vh.toFloat() / b.height)
-            if (fit >= 1f) { minS = 1f; maxS = 1f; scale = 1f }
-            else { minS = fit; maxS = 1f; scale = fit }
+            minS = minOf(fit, 1f); maxS = ZOOM_MAX; scale = minOf(fit, 1f)
             panX = 0f; panY = 0f; apply()
         }
         fun show() {
@@ -520,9 +535,7 @@ class MainActivity : Activity() {
 
         val sgd = ScaleGestureDetector(this, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
             override fun onScale(d: ScaleGestureDetector): Boolean {
-                if (maxS <= minS) return true
-                scale = (scale * d.scaleFactor).coerceIn(minS, maxS)
-                apply(); return true
+                scale = (scale * d.scaleFactor).coerceIn(minS, maxS); apply(); return true
             }
         })
         val gd = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
@@ -533,15 +546,13 @@ class MainActivity : Activity() {
             }
         })
         img.setOnTouchListener { _, ev -> sgd.onTouchEvent(ev); gd.onTouchEvent(ev); true }
-
         show()
     }
 
     // ================= ВИДЕО =================
     private fun buildVideo(): View {
         val col = LinearLayout(this); col.orientation = LinearLayout.VERTICAL; col.setPadding(16, 16, 16, 16)
-        val tv = TextView(this)
-        tv.text = "🎬 Видео\n\nЗдесь появится лента клипов — свайп вверх/вниз.\nСкоро."
+        val tv = TextView(this); tv.text = "🎬 Видео\n\nЗдесь появится лента клипов — свайп вверх/вниз.\nСкоро."
         col.addView(tv); return col
     }
 
@@ -563,8 +574,17 @@ class MainActivity : Activity() {
     private fun buildChat(): View {
         val col = LinearLayout(this); col.orientation = LinearLayout.VERTICAL; col.setPadding(16, 16, 16, 16)
         ipField = EditText(this); ipField.hint = "IP сервера"; ipField.setText(prefs.getString("chat_ip", "127.0.0.1"))
-        nameField = EditText(this); nameField.hint = "Имя (чат)"; nameField.setText(prefs.getString("chat_name", ""))
-        peerField = EditText(this); peerField.hint = "Собеседник (secret)"
+        nameField = EditText(this); nameField.hint = "Имя (авто из ленты)"; nameField.setText(prefs.getString("chat_name", ""))
+        peerAdapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, ArrayList(knownNames))
+        peerPick = Spinner(this); peerPick.adapter = peerAdapter
+        peerPick.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                val n = peerAdapter.getItem(position) ?: return
+                if (n.isNotEmpty()) peerField.setText(n)
+            }
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
+        peerField = EditText(this); peerField.hint = "Собеседник (или выбери из списка)"
         val connectBtn = Button(this); connectBtn.text = "Подключиться"
         val secretBtn = Button(this); secretBtn.text = "🔐 Secret chat"
         chatBox = LinearLayout(this); chatBox.orientation = LinearLayout.VERTICAL
@@ -576,6 +596,7 @@ class MainActivity : Activity() {
         secretBtn.setOnClickListener {
             val peer = peerField.text.toString()
             if (peer.isEmpty()) { addTextLine("укажи собеседника"); return@setOnClickListener }
+            addKnown(peer)
             if (sessions.containsKey(peer)) { currentPeer = peer; addTextLine("сессия с $peer уже активна (с диска)"); return@setOnClickListener }
             pendingA.remove(peer); pendingP.remove(peer); currentPeer = peer
             Thread {
@@ -609,7 +630,8 @@ class MainActivity : Activity() {
             dispatch("[${now()}] [${me()}] $t"); msgField.setText("")
         }
 
-        col.addView(ipField); col.addView(nameField); col.addView(peerField); col.addView(connectBtn); col.addView(secretBtn)
+        col.addView(ipField); col.addView(nameField); col.addView(peerPick); col.addView(peerField)
+        col.addView(connectBtn); col.addView(secretBtn)
         col.addView(chatScroll); col.addView(msgField); col.addView(imgBtn); col.addView(sendBtn)
         return col
     }
@@ -624,6 +646,7 @@ class MainActivity : Activity() {
         val payload = if (b64 != null) body + "[IMG:$b64]" else body
         val s = sessions[currentPeer]
         if (currentPeer.isNotEmpty() && s != null) {
+            addKnown(currentPeer)
             s.sendN++; val (next, mk) = Crypto.step(s.sendCk, s.sendN); s.sendCk = next
             sendLine("@$currentPeer DM ${me()} ${s.sendN} ${Crypto.enc(mk, payload)}")
             saveSession(currentPeer, s)
@@ -668,16 +691,16 @@ class MainActivity : Activity() {
         if (line.isEmpty()) return
         val parts = line.split(" ")
         when (parts[0]) {
-            "DHREQ" -> { if (parts.size < 5) return; val from = parts[1]; if (sessions.containsKey(from)) { addTextLine("🔑 сессия с $from уже есть"); return }
+            "DHREQ" -> { if (parts.size < 5) return; val from = parts[1]; addKnown(from); if (sessions.containsKey(from)) { addTextLine("🔑 сессия с $from уже есть"); return }
                 val p = BigInteger(parts[2], 16); val g = BigInteger(parts[3], 16); val A = BigInteger(parts[4], 16)
                 Thread { val b = BigInteger(256, SecureRandom()); val B = g.modPow(b, p); val shared = A.modPow(b, p)
                     val sh = Crypto.makeSession(shared.toString(16)); sessions[from] = sh; saveSession(from, sh)
                     sendLine("@$from DHRES ${me()} ${B.toString(16)}"); addTextLine("🔐 ratchet-сессия с $from, отпечаток: ${Crypto.fingerprint(sh.sendCk)}") }.start() }
-            "DHRES" -> { if (parts.size < 3) return; val from = parts[1]; val B = BigInteger(parts[2], 16)
+            "DHRES" -> { if (parts.size < 3) return; val from = parts[1]; addKnown(from); val B = BigInteger(parts[2], 16)
                 val a = pendingA[from] ?: return; val p = pendingP[from] ?: return; val shared = B.modPow(a, p)
                 val sh = Crypto.makeSession(shared.toString(16)); sessions[from] = sh; saveSession(from, sh)
                 pendingA.remove(from); pendingP.remove(from); addTextLine("🔐 ratchet-сессия с $from, отпечаток: ${Crypto.fingerprint(sh.sendCk)}") }
-            "DM" -> { if (parts.size < 4) return; val from = parts[1]; val n = parts[2].toLongOrNull() ?: return; val ct = parts[3]
+            "DM" -> { if (parts.size < 4) return; val from = parts[1]; addKnown(from); val n = parts[2].toLongOrNull() ?: return; val ct = parts[3]
                 val s = sessions[from]; if (s == null) { addTextLine("🔒 нет сессии с $from"); return }
                 val d = decryptDM(s, n, ct); saveSession(from, s)
                 if (d == null) addTextLine("🔒 рассинхрон с $from — /reset $from") else showContent(d) }
@@ -700,7 +723,7 @@ class MainActivity : Activity() {
         filesDir.listFiles()?.forEach { f -> val nm = f.name
             if (nm.startsWith("ratchet_") && nm.endsWith(".dat") && nm.length > 12) {
                 val peer = nm.substring(8, nm.length - 4); val parts = f.readText().trim().split(" ")
-                if (parts.size == 4) sessions[peer] = Session(Crypto.unhex(parts[0]), Crypto.unhex(parts[1]), parts[2].toLong(), parts[3].toLong())
+                if (parts.size == 4) { sessions[peer] = Session(Crypto.unhex(parts[0]), Crypto.unhex(parts[1]), parts[2].toLong(), parts[3].toLong()); addKnown(peer) }
             } }
     }
 }
