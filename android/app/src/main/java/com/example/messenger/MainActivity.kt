@@ -30,8 +30,8 @@ import javax.crypto.spec.SecretKeySpec
 const val MASTER_KEY = "ludarex-babylon-2026"
 const val CHAT_PORT = 9999
 const val FEED_PORT = 8080
-const val FEED_MAX_W = 1280
-const val FEED_QUALITY = 85
+const val FEED_MAX_W = 1024
+const val FEED_QUALITY = 80
 
 class Session(var sendCk: ByteArray, var recvCk: ByteArray, var sendN: Long = 0, var recvN: Long = 0)
 
@@ -155,8 +155,8 @@ class MainActivity : Activity() {
     private var currentPeer = ""
 
     private lateinit var profileText: TextView
-    private val PICK_IMAGE = 1001      // чат: одиночное
-    private val PICK_IMAGES = 1002     // лента: несколько
+    private val PICK_IMAGE = 1001
+    private val PICK_IMAGES = 1002
     private var photoTarget = "chat"
 
     private fun now() = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
@@ -203,7 +203,7 @@ class MainActivity : Activity() {
         if (i == 3) refreshProfile()
     }
 
-    // ---------- декод с downsampling (миниатюры не жрут память) ----------
+    // ---------- декод с downsampling ----------
     private fun decodeSampled(bytes: ByteArray, reqW: Int): Bitmap? {
         val o = BitmapFactory.Options(); o.inJustDecodeBounds = true
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, o)
@@ -251,7 +251,6 @@ class MainActivity : Activity() {
         val switchBtn = Button(this); switchBtn.text = "сменить"; switchBtn.layoutParams = lp(-2, -2, 0)
         headerRow.addView(feedHeader); headerRow.addView(switchBtn)
 
-        // предпросмотр выбранных фото
         pendingWrap = LinearLayout(this); pendingWrap.orientation = LinearLayout.VERTICAL; pendingWrap.visibility = View.GONE
         val pendHead = LinearLayout(this); pendHead.orientation = LinearLayout.HORIZONTAL
         pendingInfo = TextView(this); pendingInfo.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0); wt(pendingInfo, 1f)
@@ -261,7 +260,7 @@ class MainActivity : Activity() {
         pendingRow = LinearLayout(this); pendingRow.orientation = LinearLayout.HORIZONTAL; pendScroll.addView(pendingRow)
         pendingWrap.addView(pendHead); pendingWrap.addView(pendScroll)
 
-        feedPostText = EditText(this); feedPostText.hint = "Подпись к посту (без символа |)"
+        feedPostText = EditText(this); feedPostText.hint = "Подпись к посту (до 4 фото, без символа |)"
         val rowPost = LinearLayout(this); rowPost.orientation = LinearLayout.HORIZONTAL
         val pubBtn = Button(this); pubBtn.text = "Опубликовать"; pubBtn.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0); wt(pubBtn, 2f)
         val phBtn = Button(this); phBtn.text = "📷 несколько"; phBtn.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0); wt(phBtn, 1f)
@@ -360,7 +359,7 @@ class MainActivity : Activity() {
     }
     private fun renderFeed(lines: List<String>) {
         feedBox.removeAllViews(); var any = false
-        for (ln in lines) if (ln.startsWith("P|")) { addPostCard(ln); any = true }
+        for (ln in lines) if (ln.startsWith("P|")) { try { addPostCard(ln) } catch (e: Exception) { val tv = TextView(this); tv.text = "🔒 пост повреждён (len=${ln.length})"; feedBox.addView(tv) }; any = true }
         if (!any) { val tv = TextView(this); tv.text = "лента пуста (или нет связи) — подпишись / напиши пост"; feedBox.addView(tv) }
         feedScroll.post { feedScroll.fullScroll(View.FOCUS_DOWN) }
     }
@@ -406,7 +405,7 @@ class MainActivity : Activity() {
         feedBox.addView(card)
     }
 
-    // ---------- полноэкранный просмотрщик с ◀ ▶ ----------
+    // ---------- полноэкранный просмотрщик ----------
     private fun openViewer(images: List<String>, start: Int) {
         if (images.isEmpty()) return
         val wrap = LinearLayout(this); wrap.orientation = LinearLayout.VERTICAL; wrap.setPadding(8, 8, 8, 8)
@@ -421,8 +420,7 @@ class MainActivity : Activity() {
 
         var idx = start.coerceIn(0, images.size - 1)
         fun show() {
-            val bmp = decodeB64(images[idx], FEED_MAX_W)   // полное high-res качество
-            if (bmp != null) img.setImageBitmap(bmp)
+            try { val bmp = decodeB64(images[idx], FEED_MAX_W); if (bmp != null) img.setImageBitmap(bmp) } catch (e: Exception) { }
             cnt.text = "${idx + 1} / ${images.size}"
             prev.isEnabled = idx > 0; next.isEnabled = idx < images.size - 1
         }
@@ -455,7 +453,7 @@ class MainActivity : Activity() {
             "Лента и Чаты — два входа; держи одинаковый ник, чтобы выглядеть одним аккаунтом."
     }
 
-    // ================= ЧАТ (без изменений) =================
+    // ================= ЧАТ =================
     private fun buildChat(): View {
         val col = LinearLayout(this); col.orientation = LinearLayout.VERTICAL; col.setPadding(16, 16, 16, 16)
         ipField = EditText(this); ipField.hint = "IP сервера"; ipField.setText(prefs.getString("chat_ip", "127.0.0.1"))
@@ -541,7 +539,7 @@ class MainActivity : Activity() {
             if (clip != null) { for (k in 0 until clip.itemCount) uris.add(clip.getItemAt(k).uri) }
             else data.data?.let { uris.add(it) }
             if (uris.isEmpty()) return
-            for (u in uris) { val b64 = compressUri(u, FEED_MAX_W, FEED_QUALITY); if (b64 != null) pendingImages.add(b64) }
+            for (u in uris) { if (pendingImages.size >= 4) break; val b64 = compressUri(u, FEED_MAX_W, FEED_QUALITY); if (b64 != null) pendingImages.add(b64) }
             renderPending()
         }
     }
