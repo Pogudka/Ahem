@@ -156,7 +156,6 @@ class MainActivity : Activity() {
     private lateinit var searchField: EditText
     private lateinit var searchResults: LinearLayout
     private lateinit var chatStatus: TextView
-    private lateinit var ipField: EditText
     private lateinit var nameField: EditText
     private lateinit var convTitle: TextView
     private lateinit var convBox: LinearLayout
@@ -175,6 +174,8 @@ class MainActivity : Activity() {
     private var currentChat = ""
 
     private lateinit var profileText: TextView
+    private lateinit var lanInfo: TextView
+    private lateinit var serverIpField: EditText
     private val PICK_IMAGE = 1001
     private val PICK_IMAGES = 1002
     private var photoTarget = "chat"
@@ -182,7 +183,26 @@ class MainActivity : Activity() {
     private fun now() = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
     private fun me() = nameField.text.toString().ifEmpty { feedLoggedNick.ifEmpty { "Аноним" } }
-    private fun host() = ipField.text.toString().ifEmpty { "127.0.0.1" }
+    private fun host(): String {
+        val v = if (::serverIpField.isInitialized) serverIpField.text.toString().trim() else ""
+        return v.ifEmpty { prefs.getString("server_ip", "127.0.0.1") ?: "127.0.0.1" }
+    }
+    private fun saveHost() { prefs.edit().putString("server_ip", host()).apply() }
+    private fun lanIp(): String {
+        try {
+            val ifs = java.net.NetworkInterface.getNetworkInterfaces()
+            while (ifs.hasMoreElements()) {
+                val ni = ifs.nextElement()
+                if (ni.isLoopback || !ni.isUp) continue
+                val addrs = ni.inetAddresses
+                while (addrs.hasMoreElements()) {
+                    val a = addrs.nextElement()
+                    if (!a.isLoopback && a is java.net.Inet4Address) return a.hostAddress ?: ""
+                }
+            }
+        } catch (_: Exception) {}
+        return ""
+    }
     private fun lp(w: Int, h: Int, margin: Int = 0): LinearLayout.LayoutParams { val p = LinearLayout.LayoutParams(w, h); p.bottomMargin = margin; return p }
     private fun wt(v: View, w: Float) { (v.layoutParams as LinearLayout.LayoutParams).weight = w }
     private fun safeName(s: String) = s.replace(Regex("[^A-Za-z0-9а-яА-Я_]"), "_")
@@ -240,7 +260,6 @@ class MainActivity : Activity() {
         setContentView(root)
         showTab(0)
 
-        // АВТОВХОД: prefs.getString возвращает String? — обязательно ?: ""
         val ae = prefs.getString("feed_email", "") ?: ""
         val ap = prefs.getString("feed_pass", "") ?: ""
         if (ae.isNotEmpty() && ap.isNotEmpty()) {
@@ -333,16 +352,18 @@ class MainActivity : Activity() {
         regBtn.setOnClickListener {
             val e = feedEmail.text.toString(); val n = feedNick.text.toString(); val pw = feedPass.text.toString()
             if (e.isEmpty() || n.isEmpty() || pw.isEmpty()) { feedStatus.text = "заполни все поля"; return@setOnClickListener }
+            saveHost()
             Thread { val r = FeedApi.register(host(), e, n, pw); handler.post {
                 if (r.startsWith("OK|")) { feedId = r.substring(3); feedLoggedNick = n; prefs.edit().putString("feed_email", e).putString("feed_nick", n).putString("feed_pass", pw).apply(); applyFeedNickToChat(); enterFeedMode() }
-                else feedStatus.text = if (r == "ERR|connect") "нет связи с сервером" else "ошибка: $r" } }.start()
+                else feedStatus.text = if (r == "ERR|connect") "нет связи с сервером (проверь IP в Профиле)" else "ошибка: $r" } }.start()
         }
         logBtn.setOnClickListener {
             val e = feedEmail.text.toString(); val pw = feedPass.text.toString()
             if (e.isEmpty() || pw.isEmpty()) { feedStatus.text = "email + пароль"; return@setOnClickListener }
+            saveHost()
             Thread { val r = FeedApi.login(host(), e, pw); handler.post {
                 if (r.startsWith("OK|")) { val parts = r.split("|"); feedId = parts[1]; feedLoggedNick = if (parts.size > 2) parts[2] else "?"; prefs.edit().putString("feed_email", e).putString("feed_nick", feedLoggedNick).putString("feed_pass", pw).apply(); applyFeedNickToChat(); enterFeedMode() }
-                else feedStatus.text = if (r == "ERR|connect") "нет связи с сервером" else "ошибка: $r" } }.start()
+                else feedStatus.text = if (r == "ERR|connect") "нет связи с сервером (проверь IP в Профиле)" else "ошибка: $r" } }.start()
         }
         switchBtn.setOnClickListener { exitFeedMode() }
         clearBtn.setOnClickListener { pendingImages.clear(); renderPending() }
@@ -394,13 +415,14 @@ class MainActivity : Activity() {
         card.layoutParams = lp(-1, LinearLayout.LayoutParams.WRAP_CONTENT, 8); card.setBackgroundColor(0xFFEEEEEE.toInt())
         val title = TextView(this); title.text = "[$postId] @$postNick  $postTs   ♥$postLikes"; card.addView(title)
         if (postBody.isNotEmpty()) { val bt = TextView(this); bt.text = postBody; bt.setPadding(0, 4, 0, 4); card.addView(bt) }
-        if (images.isNotEmpty()) {
-            val sc = HorizontalScrollView(this); sc.layoutParams = lp(-1, -2, 4)
-            val rowIv = LinearLayout(this); rowIv.orientation = LinearLayout.HORIZONTAL; sc.addView(rowIv)
-            for (i in images.indices) { val bmp = decodeB64(images[i], 240) ?: continue
-                val iv = ImageView(this); iv.setImageBitmap(bmp); iv.adjustViewBounds = true; iv.layoutParams = lp(dp(200), LinearLayout.LayoutParams.WRAP_CONTENT, 4)
-                val idx = i; iv.setOnClickListener { openViewer(images, idx) }; rowIv.addView(iv) }
-            card.addView(sc)
+        // ВСЕ фото поста — стопкой во всю ширину, без обрезки
+        for (i in images.indices) {
+            val bmp = decodeB64(images[i], 800) ?: continue
+            val iv = ImageView(this); iv.setImageBitmap(bmp); iv.adjustViewBounds = true; iv.scaleType = ImageView.ScaleType.FIT_CENTER
+            iv.layoutParams = lp(-1, LinearLayout.LayoutParams.WRAP_CONTENT, 6)
+            val idx = i
+            iv.setOnClickListener { openViewer(images, idx) }
+            card.addView(iv)
         }
         val row = LinearLayout(this); row.orientation = LinearLayout.HORIZONTAL
         val likeBtn = Button(this); likeBtn.text = "♥"; likeBtn.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0); wt(likeBtn, 1f)
@@ -463,11 +485,10 @@ class MainActivity : Activity() {
     private fun buildChatList(): LinearLayout {
         val col = LinearLayout(this); col.orientation = LinearLayout.VERTICAL; col.setPadding(16, 16, 16, 16)
         val rowNet = LinearLayout(this); rowNet.orientation = LinearLayout.HORIZONTAL
-        ipField = EditText(this); ipField.hint = "IP сервера"; ipField.setText(prefs.getString("chat_ip", "127.0.0.1")); ipField.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0); wt(ipField, 2f)
-        val connectBtn = Button(this); connectBtn.text = "Подключиться"; connectBtn.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0); wt(connectBtn, 1f)
-        rowNet.addView(ipField); rowNet.addView(connectBtn)
+        val connectBtn = Button(this); connectBtn.text = "Подключиться"; connectBtn.layoutParams = lp(-1, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
+        rowNet.addView(connectBtn)
         nameField = EditText(this); nameField.hint = "Твоё имя (авто из ленты)"; nameField.setText(prefs.getString("chat_name", ""))
-        chatStatus = TextView(this); chatStatus.text = "не подключено"
+        chatStatus = TextView(this); chatStatus.text = "не подключено (IP в Профиле)"
         val rowSearch = LinearLayout(this); rowSearch.orientation = LinearLayout.HORIZONTAL
         searchField = EditText(this); searchField.hint = "Поиск человека (ник)"; searchField.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0); wt(searchField, 2f)
         val searchBtn = Button(this); searchBtn.text = "🔍"; searchBtn.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0); wt(searchBtn, 1f)
@@ -477,12 +498,11 @@ class MainActivity : Activity() {
         val listScroll = ScrollView(this); listScroll.addView(chatListRows); listScroll.layoutParams = lp(-1, 0, 0); wt(listScroll, 1f)
 
         connectBtn.setOnClickListener {
-            val ip = ipField.text.toString(); val n = me()
-            prefs.edit().putString("chat_ip", ip).putString("chat_name", n).apply()
-            chatStatus.text = "подключение..."
+            val n = me(); saveHost()
+            chatStatus.text = "подключение к ${host()}..."
             Thread {
                 try {
-                    val s = Socket(ip, CHAT_PORT); socket = s; out = s.getOutputStream()
+                    val s = Socket(host(), CHAT_PORT); socket = s; out = s.getOutputStream()
                     sendLine("REG $n"); handler.post { chatStatus.text = "подключено как $n" }
                     val b = ByteArray(8192)
                     while (true) { val nn = s.getInputStream().read(b); if (nn <= 0) break; handler.post { addText(String(b, 0, nn, Charsets.UTF_8)) } }
@@ -645,11 +665,18 @@ class MainActivity : Activity() {
     }
     private fun buildProfile(): View {
         val col = LinearLayout(this); col.orientation = LinearLayout.VERTICAL; col.setPadding(16, 16, 16, 16)
-        profileText = TextView(this); col.addView(profileText); return col
+        val head = TextView(this); head.text = "👤 Профиль и сеть"; head.textSize = 18f
+        lanInfo = TextView(this)
+        serverIpField = EditText(this); serverIpField.hint = "IP сервера (куда подключаться)"; serverIpField.setText(prefs.getString("server_ip", "127.0.0.1"))
+        profileText = TextView(this)
+        col.addView(head); col.addView(lanInfo); col.addView(serverIpField); col.addView(profileText)
+        return col
     }
     private fun refreshProfile() {
+        val ip = lanIp()
+        lanInfo.text = if (ip.isNotEmpty()) "IP этого телефона в Wi-Fi: $ip\n→ впиши его в поле «IP сервера» на ДРУГОМ телефоне" else "LAN-IP не найден (нет Wi-Fi)"
         val chatName = if (::nameField.isInitialized) nameField.text.toString() else ""
-        profileText.text = "👤 Профиль\n\nЛента: @${if (feedLoggedNick.isEmpty()) "—" else feedLoggedNick} (id ${if (feedId.isEmpty()) "—" else feedId})\nЧат: ${if (chatName.isEmpty()) "—" else chatName}\n\nНастройки, аватар и био появятся здесь."
+        profileText.text = "Лента: @${if (feedLoggedNick.isEmpty()) "—" else feedLoggedNick} (id ${if (feedId.isEmpty()) "—" else feedId})\nЧат: ${if (chatName.isEmpty()) "—" else chatName}\nПодключаюсь к: ${host()}\n\nНастройки, аватар и био появятся здесь."
     }
 
     private fun pickImage() { startActivityForResult(Intent(Intent.ACTION_PICK, MediaStore.Images.Media.EXTERNAL_CONTENT_URI), PICK_IMAGE) }
