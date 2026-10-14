@@ -20,16 +20,35 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import javax.crypto.Cipher
+import javax.crypto.Mac
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 const val MASTER_KEY = "ludarex-babylon-2026"
 
+class Session(var sendCk: ByteArray, var recvCk: ByteArray, var sendN: Long = 0, var recvN: Long = 0)
+
 object Crypto {
     fun sha256(b: ByteArray): ByteArray = MessageDigest.getInstance("SHA-256").digest(b)
+    fun hmac(key: ByteArray, msg: ByteArray): ByteArray {
+        val m = Mac.getInstance("HmacSHA256")
+        m.init(SecretKeySpec(key, "HmacSHA256"))
+        return m.doFinal(msg)
+    }
     fun groupKey(): ByteArray = sha256(MASTER_KEY.toByteArray())
     fun hex(b: ByteArray) = b.joinToString("") { "%02x".format(it) }
     fun unhex(s: String): ByteArray = s.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+    fun step(ck: ByteArray, n: Long): Pair<ByteArray, ByteArray> {
+        val base = "ratchet:$n".toByteArray()
+        val next = hmac(ck, base + byteArrayOf(1))
+        val mk = hmac(ck, base + byteArrayOf(2))
+        return next to mk
+    }
+    fun makeSession(sharedHex: String): Session {
+        val root = sha256(sharedHex.toByteArray())
+        val ck0 = hmac(root, "chain-init".toByteArray())
+        return Session(ck0.copyOf(), ck0.copyOf())
+    }
     fun enc(key: ByteArray, text: String): String {
         val nonce = ByteArray(12); SecureRandom().nextBytes(nonce)
         val c = Cipher.getInstance("AES/GCM/NoPadding")
@@ -66,7 +85,7 @@ class MainActivity : Activity() {
     @Volatile private var out: java.io.OutputStream? = null
     @Volatile private var socket: Socket? = null
     private val buf = StringBuilder()
-    private val sessionKeys = mutableMapOf<String, ByteArray>()
+    private val sessions = mutableMapOf<String, Session>()
     private val pendingA = mutableMapOf<String, BigInteger>()
     private val pendingP = mutableMapOf<String, BigInteger>()
     private var currentPeer = ""
@@ -75,8 +94,18 @@ class MainActivity : Activity() {
     private fun now() = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
     private fun me() = nameField.text.toString().ifEmpty { "Аноним" }
-    private fun lockMsg(line: String, who: String) =
-        addTextLine("🔒 $who (len=${line.length}) head=${line.take(12)} tail=${line.takeLast(12)}")
+
+    private fun decryptDM(s: Session, target: Long, ct: String): String? {
+        if (target <= s.recvN) return null
+        var mk = ByteArray(0)
+        while (s.recvN < target) {
+            s.recvN++
+            val (next, k) = Crypto.step(s.recvCk, s.recvN)
+            s.recvCk = next
+            if (s.recvN == target) mk = k
+        }
+        return Crypto.dec(mk, ct)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -100,9 +129,9 @@ class MainActivity : Activity() {
         secretBtn.setOnClickListener {
             val peer = peerField.text.toString()
             if (peer.isEmpty()) { addTextLine("укажи собеседника"); return@setOnClickListener }
-            if (sessionKeys.containsKey(peer)) {
+            if (sessions.containsKey(peer)) {
                 currentPeer = peer
-                addTextLine("сессия с $peer уже активна, отпечаток: ${Crypto.fingerprint(sessionKeys[peer]!!)}")
+                addTextLine("сессия с $peer уже активна")
                 return@setOnClickListener
             }
             if (pendingA.containsKey(peer)) {
@@ -163,7 +192,7 @@ class MainActivity : Activity() {
             }
             if (t.startsWith("/reset ")) {
                 val peer = t.substring(7)
-                sessionKeys.remove(peer); pendingA.remove(peer); pendingP.remove(peer)
+                sessions.remove(peer); pendingA.remove(peer); pendingP.remove(peer)
                 if (currentPeer == peer) currentPeer = ""
                 addTextLine("сессия с $peer сброшена")
                 msgField.setText("")
@@ -178,10 +207,13 @@ class MainActivity : Activity() {
 
     private fun dispatch(body: String, b64: String? = null) {
         val payload = if (b64 != null) body + "[IMG:$b64]" else body
-        val isDm = currentPeer.isNotEmpty() && sessionKeys.containsKey(currentPeer)
-        if (isDm) {
-            val ct = Crypto.enc(sessionKeys[currentPeer]!!, payload)
-            sendLine("@$currentPeer DM ${me()} $ct")
+        val s = sessions[currentPeer]
+        if (currentPeer.isNotEmpty() && s != null) {
+            s.sendN++
+            val (next, mk) = Crypto.step(s.sendCk, s.sendN)
+            s.sendCk = next
+            val ct = Crypto.enc(mk, payload)
+            sendLine("@$currentPeer DM ${me()} ${s.sendN} $ct")
             if (b64 != null) handler.post { addImageView(b64) } else addTextLine(payload)
         } else {
             sendLine(Crypto.enc(Crypto.groupKey(), payload))
@@ -251,7 +283,7 @@ class MainActivity : Activity() {
             "DHREQ" -> {
                 if (parts.size < 5) return
                 val from = parts[1]
-                if (sessionKeys.containsKey(from)) { addTextLine("🔑 сессия с $from уже есть, игнорирую повторный запрос"); return }
+                if (sessions.containsKey(from)) { addTextLine("🔑 сессия с $from уже есть, игнорирую"); return }
                 val p = BigInteger(parts[2], 16)
                 val g = BigInteger(parts[3], 16)
                 val A = BigInteger(parts[4], 16)
@@ -259,10 +291,10 @@ class MainActivity : Activity() {
                     val b = BigInteger(256, SecureRandom())
                     val B = g.modPow(b, p)
                     val shared = A.modPow(b, p)
-                    val key = Crypto.sha256(shared.toString(16).toByteArray())
-                    sessionKeys[from] = key
+                    val sharedHex = shared.toString(16)
+                    sessions[from] = Crypto.makeSession(sharedHex)
                     sendLine("@$from DHRES ${me()} ${B.toString(16)}")
-                    addTextLine("🔐 ключ с $from, отпечаток: ${Crypto.fingerprint(key)}")
+                    addTextLine("🔐 ratchet-сессия с $from")
                 }.start()
             }
             "DHRES" -> {
@@ -272,25 +304,25 @@ class MainActivity : Activity() {
                 val a = pendingA[from] ?: return
                 val p = pendingP[from] ?: return
                 val shared = B.modPow(a, p)
-                val key = Crypto.sha256(shared.toString(16).toByteArray())
-                sessionKeys[from] = key
+                sessions[from] = Crypto.makeSession(shared.toString(16))
                 pendingA.remove(from); pendingP.remove(from)
-                addTextLine("🔐 ключ с $from, отпечаток: ${Crypto.fingerprint(key)}")
+                addTextLine("🔐 ratchet-сессия с $from")
             }
             "DM" -> {
-                if (parts.size < 3) return
+                if (parts.size < 4) return
                 val from = parts[1]
-                val ct = parts[2]
-                val key = sessionKeys[from]
-                if (key == null) { addTextLine("🔒 нет ключа с $from"); return }
-                val d = Crypto.dec(key, ct)
-                if (d == null) lockMsg(ct, "не читается от $from")
+                val n = parts[2].toLongOrNull() ?: return
+                val ct = parts[3]
+                val s = sessions[from]
+                if (s == null) { addTextLine("🔒 нет сессии с $from"); return }
+                val d = decryptDM(s, n, ct)
+                if (d == null) addTextLine("🔒 рассинхрон цепочки с $from — сделай /reset $from")
                 else showContent(d)
             }
             "===" -> addTextLine(line)
             else -> {
                 val d = Crypto.dec(Crypto.groupKey(), line)
-                if (d == null) lockMsg(line, "группа не читается")
+                if (d == null) addTextLine("🔒 группа не читается (len=${line.length})")
                 else showContent(d)
             }
         }
@@ -299,7 +331,8 @@ class MainActivity : Activity() {
     private fun showContent(d: String) {
         val m = Regex("\\[IMG:([^\\]]+)\\]").find(d)
         if (m != null) {
-            addTextLine(d.substring(0, m.range.first))
+            val prefix = d.substring(0, m.range.first).trimEnd()
+            if (prefix.isNotEmpty()) addTextLine(prefix)
             addImageView(m.groupValues[1])
         } else addTextLine(d)
     }
