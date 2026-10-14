@@ -689,7 +689,7 @@ class MainActivity : Activity() {
             "DM" -> { if (parts.size < 4) return; val from = parts[1]; addKnown(from); val n = parts[2].toLongOrNull() ?: return; val ct = parts[3]
                 val s = sessions[from]; if (s == null) { storeAndShow(from, "sys:🔒 нет сессии"); return }
                 val d = decryptDM(s, n, ct); saveSession(from, s)
-                if (d == null) storeAndShow(from, "sys:🔒 рассинхрон — открой и нажми 🔐 заново") else showContentInto(from, d!!) }
+                if (d == null) { storeAndShow(from, "sys:🔒 рассинхрон — открой и нажми 🔐 заново") } else { showContentInto(from, d!!) } }
             else -> { }
         }
     }
