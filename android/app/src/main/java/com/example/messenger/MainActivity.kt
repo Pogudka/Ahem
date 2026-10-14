@@ -193,11 +193,11 @@ class MainActivity : Activity() {
             val ifs = java.net.NetworkInterface.getNetworkInterfaces()
             while (ifs.hasMoreElements()) {
                 val ni = ifs.nextElement()
-                if (ni.isLoopback || !ni.isUp) continue
+                if (ni.isLoopback() || !ni.isUp()) continue
                 val addrs = ni.inetAddresses
                 while (addrs.hasMoreElements()) {
                     val a = addrs.nextElement()
-                    if (!a.isLoopback && a is java.net.Inet4Address) return a.hostAddress ?: ""
+                    if (!a.isLoopbackAddress && a is java.net.Inet4Address) return a.hostAddress ?: ""
                 }
             }
         } catch (_: Exception) {}
@@ -394,7 +394,6 @@ class MainActivity : Activity() {
             val idx = i; iv.setOnClickListener { openViewer(pendingImages, idx) }; pendingRow.addView(iv) }
     }
 
-    // keepPos=true (лайк/подписка) — не дёргаем скролл; false (вход/⟳/новый пост) — наверх к новому
     private fun refreshFeedAsync(keepPos: Boolean) {
         if (feedId.isEmpty() || feedBusy) return
         feedBusy = true
@@ -403,7 +402,6 @@ class MainActivity : Activity() {
     private fun renderFeed(lines: List<String>, keepPos: Boolean) {
         val y = feedScroll.scrollY
         feedBox.removeAllViews(); var any = false
-        // НОВЫЕ СВЕРХУ: листаем ВНИЗ к старым (как в Instagram/VK)
         for (i in lines.indices.reversed()) {
             val ln = lines[i]
             if (ln.startsWith("P|")) { try { addPostCard(ln) } catch (e: Exception) {}; any = true }
