@@ -11,6 +11,7 @@ import android.os.Looper
 import android.provider.MediaStore
 import android.util.Base64
 import android.view.View
+import android.view.Gravity
 import android.widget.*
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -216,14 +217,17 @@ class MainActivity : Activity() {
         val bytes = try { Base64.decode(b64, Base64.NO_WRAP) } catch (e: Exception) { return null }
         return decodeSampled(bytes, reqW)
     }
-    // сжать uri -> high-res base64 (до FEED_MAX_W, q FEED_QUALITY)
-    private fun compressUri(uri: android.net.Uri, maxW: Int, quality: Int): String? = try {
-        val ins = contentResolver.openInputStream(uri) ?: return null
-        val bmp = BitmapFactory.decodeStream(ins); ins.close()
-        val scaled = if (bmp.width > maxW) Bitmap.createScaledBitmap(bmp, maxW, maxW * bmp.height / bmp.width, true) else bmp
-        val baos = ByteArrayOutputStream(); scaled.compress(Bitmap.CompressFormat.JPEG, quality, baos)
-        Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)
-    } catch (e: Exception) { null }
+    private fun compressUri(uri: android.net.Uri, maxW: Int, quality: Int): String? {
+        return try {
+            val ins = contentResolver.openInputStream(uri)
+            if (ins == null) null else {
+                val bmp = BitmapFactory.decodeStream(ins); ins.close()
+                val scaled = if (bmp.width > maxW) Bitmap.createScaledBitmap(bmp, maxW, maxW * bmp.height / bmp.width, true) else bmp
+                val baos = ByteArrayOutputStream(); scaled.compress(Bitmap.CompressFormat.JPEG, quality, baos)
+                Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)
+            }
+        } catch (e: Exception) { null }
+    }
 
     // ================= ЛЕНТА =================
     private fun buildFeed(): View {
