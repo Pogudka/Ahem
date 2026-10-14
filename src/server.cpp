@@ -2,6 +2,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <fstream>
 #include <cstring>
 #include <thread>
 #include <mutex>
@@ -10,12 +11,25 @@
 #include <unistd.h>
 
 const int PORT = 9999;
+const std::string DB_FILE = "chat_db.txt";
 
+std::vector<std::string> history;
+std::mutex histMtx;
 std::map<std::string, int> nameToSock;
 std::mutex nameMtx;
 std::vector<int> clients;
 std::mutex clientsMtx;
 
+void saveHistory() {
+    std::ofstream f(DB_FILE);
+    for (const std::string& s : history) f << s << "\n";
+}
+void loadHistory() {
+    history.clear();
+    std::ifstream f(DB_FILE);
+    std::string s;
+    while (std::getline(f, s)) if (!s.empty()) history.push_back(s);
+}
 void sendAll(const std::string& t) {
     std::lock_guard<std::mutex> lk(clientsMtx);
     for (int c : clients) send(c, t.c_str(), t.size(), 0);
@@ -48,12 +62,10 @@ void handleClient(int sock) {
                 if (line.rfind("REG ", 0) == 0) {
                     myName = line.substr(4);
                     int old = -1;
-                    {
-                        std::lock_guard<std::mutex> lk(nameMtx);
-                        auto it = nameToSock.find(myName);
-                        if (it != nameToSock.end() && it->second != sock) { old = it->second; it->second = sock; }
-                        else nameToSock[myName] = sock;
-                    }
+                    { std::lock_guard<std::mutex> lk(nameMtx);
+                      auto it = nameToSock.find(myName);
+                      if (it != nameToSock.end() && it->second != sock) { old = it->second; it->second = sock; }
+                      else nameToSock[myName] = sock; }
                     if (old != -1) { dropFromClients(old); shutdown(old, SHUT_RDWR); }
                     { std::lock_guard<std::mutex> lk(clientsMtx); clients.push_back(sock); }
                     registered = true;
@@ -64,26 +76,33 @@ void handleClient(int sock) {
             if (line[0] == '@') {
                 size_t sp = line.find(' ');
                 if (sp == std::string::npos) continue;
-                std::string to = line.substr(1, sp - 1);
-                std::string payload = line.substr(sp + 1);
-                sendTo(to, payload + "\n");
+                sendTo(line.substr(1, sp - 1), line.substr(sp + 1) + "\n");
+            } else if (line == "/history") {
+                std::string reply;
+                { std::lock_guard<std::mutex> lk(histMtx);
+                  for (const std::string& s : history) reply += s + "\n"; }
+                if (reply.empty()) reply = "История пуста\n";
+                send(sock, reply.c_str(), reply.size(), 0);
+            } else if (line == "/clear") {
+                { std::lock_guard<std::mutex> lk(histMtx); history.clear(); saveHistory(); }
+                sendAll("=== сервер очистил чат ===\n");
             } else {
+                { std::lock_guard<std::mutex> lk(histMtx); history.push_back(line); saveHistory(); }
                 sendAll(line + "\n");
             }
         }
     }
     bool wasActive = false;
-    {
-        std::lock_guard<std::mutex> lk(nameMtx);
-        auto it = nameToSock.find(myName);
-        if (it != nameToSock.end() && it->second == sock) { nameToSock.erase(it); wasActive = !myName.empty(); }
-    }
+    { std::lock_guard<std::mutex> lk(nameMtx);
+      auto it = nameToSock.find(myName);
+      if (it != nameToSock.end() && it->second == sock) { nameToSock.erase(it); wasActive = !myName.empty(); } }
     dropFromClients(sock);
     if (wasActive) sendAll("=== " + myName + " вышел ===\n");
     close(sock);
 }
 int main() {
-    std::cout << "=== СЕРВЕР Ludarex v3.1 (маршрутизатор, kick старых сессий) ===\n";
+    loadHistory();
+    std::cout << "=== СЕРВЕР Ludarex v3.2 (чистая история) === строк: " << history.size() << "\n";
     int ss = socket(AF_INET, SOCK_STREAM, 0);
     int yes = 1; setsockopt(ss, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
     sockaddr_in a{}; a.sin_family = AF_INET; a.sin_addr.s_addr = INADDR_ANY; a.sin_port = htons(PORT);
