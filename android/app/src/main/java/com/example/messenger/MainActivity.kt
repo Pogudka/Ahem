@@ -372,18 +372,18 @@ class MainActivity : Activity() {
             if (feedId.isEmpty()) return@setOnClickListener
             val body = feedPostText.text.toString().replace("|", "/"); val img = pendingImages.joinToString(",")
             if (body.isEmpty() && img.isEmpty()) return@setOnClickListener
-            Thread { FeedApi.post(host(), feedId, body, img); handler.post { pendingImages.clear(); renderPending(); refreshFeedAsync() } }.start()
+            Thread { FeedApi.post(host(), feedId, body, img); handler.post { pendingImages.clear(); renderPending(); refreshFeedAsync(false) } }.start()
             feedPostText.setText("")
         }
-        feedBtn.setOnClickListener { refreshFeedAsync() }
+        feedBtn.setOnClickListener { refreshFeedAsync(false) }
         folBtn.setOnClickListener {
             if (feedId.isEmpty()) return@setOnClickListener
             val n = feedFollowNick.text.toString(); if (n.isEmpty()) return@setOnClickListener
-            Thread { FeedApi.follow(host(), n, feedId); handler.post { addKnown(n); refreshFeedAsync() } }.start(); feedFollowNick.setText("")
+            Thread { FeedApi.follow(host(), n, feedId); handler.post { addKnown(n); refreshFeedAsync(true) } }.start(); feedFollowNick.setText("")
         }
         col.addView(authBlock); col.addView(feedBlock); return col
     }
-    private fun enterFeedMode() { authBlock.visibility = View.GONE; feedBlock.visibility = View.VISIBLE; feedHeader.text = "@$feedLoggedNick (id $feedId)"; refreshFeedAsync() }
+    private fun enterFeedMode() { authBlock.visibility = View.GONE; feedBlock.visibility = View.VISIBLE; feedHeader.text = "@$feedLoggedNick (id $feedId)"; refreshFeedAsync(false) }
     private fun exitFeedMode() { feedBlock.visibility = View.GONE; authBlock.visibility = View.VISIBLE; feedStatus.text = "не залогинен"; feedId = ""; feedLoggedNick = ""; pendingImages.clear(); renderPending() }
     private fun renderPending() {
         pendingRow.removeAllViews()
@@ -393,16 +393,23 @@ class MainActivity : Activity() {
             val iv = ImageView(this); iv.setImageBitmap(bmp); iv.adjustViewBounds = true; iv.layoutParams = lp(dp(120), LinearLayout.LayoutParams.WRAP_CONTENT, 4)
             val idx = i; iv.setOnClickListener { openViewer(pendingImages, idx) }; pendingRow.addView(iv) }
     }
-    private fun refreshFeedAsync() {
+
+    // keepPos=true (лайк/подписка) — не дёргаем скролл; false (вход/⟳/новый пост) — наверх к новому
+    private fun refreshFeedAsync(keepPos: Boolean) {
         if (feedId.isEmpty() || feedBusy) return
         feedBusy = true
-        Thread { try { val lines = FeedApi.feed(host(), feedId); handler.post { renderFeed(lines); feedBusy = false } } catch (e: Exception) { handler.post { feedBusy = false } } }.start()
+        Thread { try { val lines = FeedApi.feed(host(), feedId); handler.post { renderFeed(lines, keepPos); feedBusy = false } } catch (e: Exception) { handler.post { feedBusy = false } } }.start()
     }
-    private fun renderFeed(lines: List<String>) {
+    private fun renderFeed(lines: List<String>, keepPos: Boolean) {
+        val y = feedScroll.scrollY
         feedBox.removeAllViews(); var any = false
-        for (ln in lines) if (ln.startsWith("P|")) { try { addPostCard(ln) } catch (e: Exception) {} ; any = true }
+        // НОВЫЕ СВЕРХУ: листаем ВНИЗ к старым (как в Instagram/VK)
+        for (i in lines.indices.reversed()) {
+            val ln = lines[i]
+            if (ln.startsWith("P|")) { try { addPostCard(ln) } catch (e: Exception) {}; any = true }
+        }
         if (!any) { val tv = TextView(this); tv.text = "лента пуста — подпишись или напиши пост"; feedBox.addView(tv) }
-        feedScroll.post { feedScroll.fullScroll(View.FOCUS_DOWN) }
+        feedScroll.post { if (keepPos) feedScroll.scrollTo(0, y) else feedScroll.scrollTo(0, 0) }
     }
     private fun addPostCard(line: String) {
         val rest = line.substring(2); val li = rest.lastIndexOf('|')
@@ -415,7 +422,6 @@ class MainActivity : Activity() {
         card.layoutParams = lp(-1, LinearLayout.LayoutParams.WRAP_CONTENT, 8); card.setBackgroundColor(0xFFEEEEEE.toInt())
         val title = TextView(this); title.text = "[$postId] @$postNick  $postTs   ♥$postLikes"; card.addView(title)
         if (postBody.isNotEmpty()) { val bt = TextView(this); bt.text = postBody; bt.setPadding(0, 4, 0, 4); card.addView(bt) }
-        // ВСЕ фото поста — стопкой во всю ширину, без обрезки
         for (i in images.indices) {
             val bmp = decodeB64(images[i], 800) ?: continue
             val iv = ImageView(this); iv.setImageBitmap(bmp); iv.adjustViewBounds = true; iv.scaleType = ImageView.ScaleType.FIT_CENTER
@@ -426,11 +432,11 @@ class MainActivity : Activity() {
         }
         val row = LinearLayout(this); row.orientation = LinearLayout.HORIZONTAL
         val likeBtn = Button(this); likeBtn.text = "♥"; likeBtn.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0); wt(likeBtn, 1f)
-        likeBtn.setOnClickListener { if (feedId.isNotEmpty()) Thread { FeedApi.like(host(), postId, feedId); handler.post { refreshFeedAsync() } }.start() }
+        likeBtn.setOnClickListener { if (feedId.isNotEmpty()) Thread { FeedApi.like(host(), postId, feedId); handler.post { refreshFeedAsync(true) } }.start() }
         row.addView(likeBtn)
         if (postNick != feedLoggedNick) {
             val fb = Button(this); fb.text = "+ @$postNick"; fb.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0); wt(fb, 2f)
-            fb.setOnClickListener { if (feedId.isNotEmpty()) Thread { FeedApi.follow(host(), postNick, feedId); handler.post { addKnown(postNick); refreshFeedAsync() } }.start() }
+            fb.setOnClickListener { if (feedId.isNotEmpty()) Thread { FeedApi.follow(host(), postNick, feedId); handler.post { addKnown(postNick); refreshFeedAsync(true) } }.start() }
             row.addView(fb)
         }
         card.addView(row); feedBox.addView(card)
