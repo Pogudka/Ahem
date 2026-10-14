@@ -72,6 +72,7 @@ object Crypto {
     }
 }
 
+// ВСЕ сетевые вызовы ленты защищены: нет сервера -> строка ERR|..., а не вылет.
 object FeedApi {
     private fun readLine(acc: StringBuilder, ins: java.io.InputStream): String? {
         while (true) {
@@ -81,20 +82,24 @@ object FeedApi {
         }
     }
     private fun ask(ip: String, req: String): String {
-        val s = Socket(ip, FEED_PORT)
+        var s: Socket? = null
         try {
+            s = Socket(ip, FEED_PORT)
             s.getOutputStream().write((req + "\n").toByteArray()); s.getOutputStream().flush()
             val acc = StringBuilder(); return readLine(acc, s.getInputStream()) ?: "ERR|eof"
-        } finally { try { s.close() } catch (_: Exception) {} }
+        } catch (e: Exception) { return "ERR|connect" }
+        finally { try { s?.close() } catch (_: Exception) {} }
     }
     private fun askMulti(ip: String, req: String): List<String> {
-        val s = Socket(ip, FEED_PORT)
+        var s: Socket? = null
         val out = ArrayList<String>()
         try {
+            s = Socket(ip, FEED_PORT)
             s.getOutputStream().write((req + "\n").toByteArray()); s.getOutputStream().flush()
             val acc = StringBuilder()
             while (true) { val l = readLine(acc, s.getInputStream()) ?: break; if (l == "END") break; out.add(l) }
-        } finally { try { s.close() } catch (_: Exception) {} }
+        } catch (e: Exception) { /* пусто = нет связи */ }
+        finally { try { s?.close() } catch (_: Exception) {} }
         return out
     }
     fun register(ip: String, email: String, nick: String, pass: String) = ask(ip, "REG|$email|$nick|$pass")
@@ -107,11 +112,15 @@ object FeedApi {
 
 class MainActivity : Activity() {
     private val handler = Handler(Looper.getMainLooper())
+    private lateinit var prefs: android.content.SharedPreferences
 
     private lateinit var tabs: Array<View>
     private lateinit var tabBtns: Array<Button>
 
     // лента
+    private lateinit var authBlock: LinearLayout
+    private lateinit var feedBlock: LinearLayout
+    private lateinit var feedHeader: TextView
     private lateinit var feedEmail: EditText
     private lateinit var feedNick: EditText
     private lateinit var feedPass: EditText
@@ -149,14 +158,15 @@ class MainActivity : Activity() {
     private fun lp(w: Int, h: Int, margin: Int = 0): LinearLayout.LayoutParams {
         val p = LinearLayout.LayoutParams(w, h); p.bottomMargin = margin; return p
     }
+    private fun wt(v: View, w: Float) { (v.layoutParams as LinearLayout.LayoutParams).weight = w }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        prefs = getSharedPreferences("lud", MODE_PRIVATE)
         loadAllSessions()
 
         val root = LinearLayout(this); root.orientation = LinearLayout.VERTICAL
-        val content = FrameLayout(this); content.layoutParams = lp(-1, 0, 0)
-        (content.layoutParams as LinearLayout.LayoutParams).weight = 1f
+        val content = FrameLayout(this); content.layoutParams = lp(-1, 0, 0); wt(content, 1f)
         val panel = LinearLayout(this); panel.orientation = LinearLayout.HORIZONTAL
 
         val feedTab = buildFeed()
@@ -168,12 +178,9 @@ class MainActivity : Activity() {
 
         val titles = arrayOf("📰 Лента", "🎬 Видео", "💬 Чаты", "👤 Профиль")
         tabBtns = Array(4) { i ->
-            val b = Button(this)
-            b.text = titles[i]
-            val blp = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-            b.layoutParams = blp
-            b.setOnClickListener { showTab(i) }
-            b
+            val b = Button(this); b.text = titles[i]
+            b.layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            b.setOnClickListener { showTab(i) }; b
         }
         for (b in tabBtns) panel.addView(b)
 
@@ -192,34 +199,42 @@ class MainActivity : Activity() {
     private fun buildFeed(): View {
         val col = LinearLayout(this); col.orientation = LinearLayout.VERTICAL; col.setPadding(16, 16, 16, 16)
 
+        // --- блок авторизации (прячется после входа) ---
+        authBlock = LinearLayout(this); authBlock.orientation = LinearLayout.VERTICAL
         feedEmail = EditText(this); feedEmail.hint = "email (логин ленты)"
+        feedEmail.setText(prefs.getString("feed_email", ""))
         feedNick = EditText(this); feedNick.hint = "ник"
+        feedNick.setText(prefs.getString("feed_nick", ""))
         feedPass = EditText(this); feedPass.hint = "пароль"; feedPass.inputType = 1
         val rowAuth = LinearLayout(this); rowAuth.orientation = LinearLayout.HORIZONTAL
-        val regBtn = Button(this); regBtn.text = "Регистрация"; regBtn.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
-        (regBtn.layoutParams as LinearLayout.LayoutParams).weight = 1f
-        val logBtn = Button(this); logBtn.text = "Вход"; logBtn.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
-        (logBtn.layoutParams as LinearLayout.LayoutParams).weight = 1f
+        val regBtn = Button(this); regBtn.text = "Регистрация"; regBtn.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0); wt(regBtn, 1f)
+        val logBtn = Button(this); logBtn.text = "Вход"; logBtn.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0); wt(logBtn, 1f)
         rowAuth.addView(regBtn); rowAuth.addView(logBtn)
         feedStatus = TextView(this); feedStatus.text = "не залогинен"
+        authBlock.addView(feedEmail); authBlock.addView(feedNick); authBlock.addView(feedPass)
+        authBlock.addView(rowAuth); authBlock.addView(feedStatus)
+
+        // --- блок публикации + ленты (сверху после входа) ---
+        feedBlock = LinearLayout(this); feedBlock.orientation = LinearLayout.VERTICAL
+        val headerRow = LinearLayout(this); headerRow.orientation = LinearLayout.HORIZONTAL
+        feedHeader = TextView(this); feedHeader.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0); wt(feedHeader, 1f)
+        val switchBtn = Button(this); switchBtn.text = "сменить"; switchBtn.layoutParams = lp(-2, -2, 0)
+        headerRow.addView(feedHeader); headerRow.addView(switchBtn)
         feedPostText = EditText(this); feedPostText.hint = "Новый пост (без символа |)"
         val rowPost = LinearLayout(this); rowPost.orientation = LinearLayout.HORIZONTAL
-        val pubBtn = Button(this); pubBtn.text = "Опубликовать"; pubBtn.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
-        (pubBtn.layoutParams as LinearLayout.LayoutParams).weight = 2f
-        val phBtn = Button(this); phBtn.text = "📷"; phBtn.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
-        (phBtn.layoutParams as LinearLayout.LayoutParams).weight = 1f
+        val pubBtn = Button(this); pubBtn.text = "Опубликовать"; pubBtn.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0); wt(pubBtn, 2f)
+        val phBtn = Button(this); phBtn.text = "📷"; phBtn.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0); wt(phBtn, 1f)
         rowPost.addView(pubBtn); rowPost.addView(phBtn)
         val rowAct = LinearLayout(this); rowAct.orientation = LinearLayout.HORIZONTAL
-        val feedBtn = Button(this); feedBtn.text = "⟳ Лента"; feedBtn.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
-        (feedBtn.layoutParams as LinearLayout.LayoutParams).weight = 1f
-        feedFollowNick = EditText(this); feedFollowNick.hint = "@ник подписки"; feedFollowNick.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
-        (feedFollowNick.layoutParams as LinearLayout.LayoutParams).weight = 2f
-        val folBtn = Button(this); folBtn.text = "Подписаться"; folBtn.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
-        (folBtn.layoutParams as LinearLayout.LayoutParams).weight = 1f
+        val feedBtn = Button(this); feedBtn.text = "⟳ Лента"; feedBtn.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0); wt(feedBtn, 1f)
+        feedFollowNick = EditText(this); feedFollowNick.hint = "@ник подписки"; feedFollowNick.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0); wt(feedFollowNick, 2f)
+        val folBtn = Button(this); folBtn.text = "Подписаться"; folBtn.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0); wt(folBtn, 1f)
         rowAct.addView(feedBtn); rowAct.addView(feedFollowNick); rowAct.addView(folBtn)
         feedBox = LinearLayout(this); feedBox.orientation = LinearLayout.VERTICAL
-        feedScroll = ScrollView(this); feedScroll.addView(feedBox)
-        feedScroll.layoutParams = lp(-1, 0, 0); (feedScroll.layoutParams as LinearLayout.LayoutParams).weight = 1f
+        feedScroll = ScrollView(this); feedScroll.addView(feedBox); feedScroll.layoutParams = lp(-1, 0, 0); wt(feedScroll, 1f)
+        feedBlock.addView(headerRow); feedBlock.addView(feedPostText); feedBlock.addView(rowPost)
+        feedBlock.addView(rowAct); feedBlock.addView(feedScroll)
+        feedBlock.visibility = View.GONE
 
         regBtn.setOnClickListener {
             val e = feedEmail.text.toString(); val n = feedNick.text.toString(); val pw = feedPass.text.toString()
@@ -227,8 +242,11 @@ class MainActivity : Activity() {
             Thread {
                 val r = FeedApi.register(host(), e, n, pw)
                 handler.post {
-                    if (r.startsWith("OK|")) { feedId = r.substring(3); feedLoggedNick = n; feedStatus.text = "залогинен: @$n (id $feedId)" }
-                    else feedStatus.text = "ошибка: $r"
+                    if (r.startsWith("OK|")) {
+                        feedId = r.substring(3); feedLoggedNick = n
+                        prefs.edit().putString("feed_email", e).putString("feed_nick", n).apply()
+                        enterFeedMode()
+                    } else feedStatus.text = if (r == "ERR|connect") "нет связи с сервером" else "ошибка: $r"
                 }
             }.start()
         }
@@ -240,43 +258,61 @@ class MainActivity : Activity() {
                 handler.post {
                     if (r.startsWith("OK|")) {
                         val parts = r.split("|"); feedId = parts[1]; feedLoggedNick = if (parts.size > 2) parts[2] else "?"
-                        feedStatus.text = "залогинен: @$feedLoggedNick (id $feedId)"
-                    } else feedStatus.text = "ошибка: $r"
+                        prefs.edit().putString("feed_email", e).putString("feed_nick", feedLoggedNick).apply()
+                        enterFeedMode()
+                    } else feedStatus.text = if (r == "ERR|connect") "нет связи с сервером" else "ошибка: $r"
                 }
             }.start()
         }
+        switchBtn.setOnClickListener { exitFeedMode() }
         pubBtn.setOnClickListener {
-            if (feedId.isEmpty()) { feedStatus.text = "сначала вход/регистрация"; return@setOnClickListener }
+            if (feedId.isEmpty()) return@setOnClickListener
             val body = feedPostText.text.toString().replace("|", "/")
-            Thread { FeedApi.post(host(), feedId, body); handler.post { reloadFeed() } }.start()
+            Thread { FeedApi.post(host(), feedId, body); handler.post { refreshFeedAsync() } }.start()
             feedPostText.setText("")
         }
         phBtn.setOnClickListener {
-            if (feedId.isEmpty()) { feedStatus.text = "сначала вход/регистрация"; return@setOnClickListener }
+            if (feedId.isEmpty()) return@setOnClickListener
             photoTarget = "feed"; pickImage()
         }
-        feedBtn.setOnClickListener {
-            if (feedId.isEmpty()) feedStatus.text = "сначала вход" else Thread { handler.post { reloadFeed() } }.start()
-        }
+        feedBtn.setOnClickListener { if (feedId.isNotEmpty()) refreshFeedAsync() }
         folBtn.setOnClickListener {
-            if (feedId.isEmpty()) { feedStatus.text = "сначала вход"; return@setOnClickListener }
-            val n = feedFollowNick.text.toString()
-            if (n.isEmpty()) return@setOnClickListener
-            Thread { FeedApi.follow(host(), n, feedId); handler.post { reloadFeed() } }.start()
+            if (feedId.isEmpty()) return@setOnClickListener
+            val n = feedFollowNick.text.toString(); if (n.isEmpty()) return@setOnClickListener
+            Thread { FeedApi.follow(host(), n, feedId); handler.post { refreshFeedAsync() } }.start()
             feedFollowNick.setText("")
         }
 
-        col.addView(feedEmail); col.addView(feedNick); col.addView(feedPass); col.addView(rowAuth)
-        col.addView(feedStatus); col.addView(feedPostText); col.addView(rowPost); col.addView(rowAct); col.addView(feedScroll)
+        col.addView(authBlock); col.addView(feedBlock)
         return col
     }
 
-    private fun reloadFeed() {
+    private fun enterFeedMode() {
+        authBlock.visibility = View.GONE
+        feedBlock.visibility = View.VISIBLE
+        feedHeader.text = "@$feedLoggedNick (id $feedId)"
+        refreshFeedAsync()
+    }
+    private fun exitFeedMode() {
+        feedBlock.visibility = View.GONE
+        authBlock.visibility = View.VISIBLE
+        feedStatus.text = "не залогинен"
+        feedId = ""; feedLoggedNick = ""
+    }
+
+    // чтение ленты в фоне, отрисовка на main -> нет NetworkOnMainThread
+    private fun refreshFeedAsync() {
+        if (feedId.isEmpty()) return
+        Thread {
+            val lines = FeedApi.feed(host(), feedId)
+            handler.post { renderFeed(lines) }
+        }.start()
+    }
+    private fun renderFeed(lines: List<String>) {
         feedBox.removeAllViews()
-        if (feedId.isEmpty()) { val tv = TextView(this); tv.text = "войди в ленту сверху"; feedBox.addView(tv); return }
-        val lines = FeedApi.feed(host(), feedId)
-        for (ln in lines) if (ln.startsWith("P|")) addPostCard(ln)
-        if (lines.isEmpty()) { val tv = TextView(this); tv.text = "лента пуста — подпишись или напиши пост"; feedBox.addView(tv) }
+        var any = false
+        for (ln in lines) if (ln.startsWith("P|")) { addPostCard(ln); any = true }
+        if (!any) { val tv = TextView(this); tv.text = "лента пуста (или нет связи) — подпишись / напиши пост"; feedBox.addView(tv) }
         feedScroll.post { feedScroll.fullScroll(View.FOCUS_DOWN) }
     }
 
@@ -292,7 +328,6 @@ class MainActivity : Activity() {
 
         val card = LinearLayout(this); card.orientation = LinearLayout.VERTICAL; card.setPadding(8, 8, 8, 8)
         card.layoutParams = lp(-1, LinearLayout.LayoutParams.WRAP_CONTENT, 8); card.setBackgroundColor(0xFFEEEEEE.toInt())
-
         val title = TextView(this); title.text = "[$postId] @$postNick  $postTs   ♥$postLikes"; card.addView(title)
         if (postBody.isNotEmpty()) { val bt = TextView(this); bt.text = postBody; bt.setPadding(0, 4, 0, 4); card.addView(bt) }
         if (postImg.isNotEmpty()) {
@@ -304,14 +339,12 @@ class MainActivity : Activity() {
             }
         }
         val row = LinearLayout(this); row.orientation = LinearLayout.HORIZONTAL
-        val likeBtn = Button(this); likeBtn.text = "♥"; likeBtn.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
-        (likeBtn.layoutParams as LinearLayout.LayoutParams).weight = 1f
-        likeBtn.setOnClickListener { if (feedId.isEmpty()) return@setOnClickListener else Thread { FeedApi.like(host(), postId, feedId); handler.post { reloadFeed() } }.start() }
+        val likeBtn = Button(this); likeBtn.text = "♥"; likeBtn.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0); wt(likeBtn, 1f)
+        likeBtn.setOnClickListener { if (feedId.isNotEmpty()) Thread { FeedApi.like(host(), postId, feedId); handler.post { refreshFeedAsync() } }.start() }
         row.addView(likeBtn)
         if (postNick != feedLoggedNick) {
-            val fb = Button(this); fb.text = "+ @$postNick"; fb.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
-            (fb.layoutParams as LinearLayout.LayoutParams).weight = 2f
-            fb.setOnClickListener { if (feedId.isEmpty()) return@setOnClickListener else Thread { FeedApi.follow(host(), postNick, feedId); handler.post { reloadFeed() } }.start() }
+            val fb = Button(this); fb.text = "+ @$postNick"; fb.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0); wt(fb, 2f)
+            fb.setOnClickListener { if (feedId.isNotEmpty()) Thread { FeedApi.follow(host(), postNick, feedId); handler.post { refreshFeedAsync() } }.start() }
             row.addView(fb)
         }
         card.addView(row)
@@ -322,38 +355,35 @@ class MainActivity : Activity() {
     private fun buildVideo(): View {
         val col = LinearLayout(this); col.orientation = LinearLayout.VERTICAL; col.setPadding(16, 16, 16, 16)
         val tv = TextView(this)
-        tv.text = "🎬 Видео-лента (TikTok-стиль)\n\nКирпич 2: вертикальные клипы свайпом, хранение файлов на сервере по URL, ExoPlayer-плеер.\nТранскод и CDN — после переезда на ПК (для своих телефонов транскод не нужен)."
-        col.addView(tv)
-        return col
+        tv.text = "🎬 Видео-лента (TikTok-стиль)\n\nКирпич 2: вертикальные клипы свайпом, файлы на сервере по URL, ExoPlayer.\nТранскод/CDN — после переезда на ПК."
+        col.addView(tv); return col
     }
 
     // ================= ПРОФИЛЬ =================
     private fun buildProfile(): View {
         val col = LinearLayout(this); col.orientation = LinearLayout.VERTICAL; col.setPadding(16, 16, 16, 16)
-        profileText = TextView(this); col.addView(profileText)
-        return col
+        profileText = TextView(this); col.addView(profileText); return col
     }
     private fun refreshProfile() {
-        val chatName = if (::nameField.isInitialized) nameField.text.toString() else "—"
+        val chatName = if (::nameField.isInitialized) nameField.text.toString() else ""
         profileText.text =
             "👤 Профиль\n\n" +
             "Лента: @${if (feedLoggedNick.isEmpty()) "—" else feedLoggedNick} (id ${if (feedId.isEmpty()) "—" else feedId})\n" +
             "Чат: ${if (chatName.isEmpty()) "—" else chatName}\n\n" +
-            "Кирпич 3: аватар, био, настройки, привязка Google/Яндекс/Mail (OAuth) — после домена haipuch.ru + HTTPS.\n" +
-            "Важно: Лента и Чаты сейчас — два отдельных входа. Чтобы выглядеть одним аккаунтом, используй одинаковый ник в обеих вкладках."
+            "Кирпич 3: аватар, био, OAuth Google/Яндекс/Mail — после haipuch.ru + HTTPS.\n" +
+            "Лента и Чаты — два входа; держи одинаковый ник, чтобы выглядеть одним аккаунтом."
     }
 
     // ================= ЧАТ =================
     private fun buildChat(): View {
         val col = LinearLayout(this); col.orientation = LinearLayout.VERTICAL; col.setPadding(16, 16, 16, 16)
-        ipField = EditText(this); ipField.setText("127.0.0.1"); ipField.hint = "IP сервера (общий для лент+чат)"
-        nameField = EditText(this); nameField.hint = "Имя (чат)"
+        ipField = EditText(this); ipField.hint = "IP сервера"; ipField.setText(prefs.getString("chat_ip", "127.0.0.1"))
+        nameField = EditText(this); nameField.hint = "Имя (чат)"; nameField.setText(prefs.getString("chat_name", ""))
         peerField = EditText(this); peerField.hint = "Собеседник (secret)"
         val connectBtn = Button(this); connectBtn.text = "Подключиться"
         val secretBtn = Button(this); secretBtn.text = "🔐 Secret chat"
         chatBox = LinearLayout(this); chatBox.orientation = LinearLayout.VERTICAL
-        chatScroll = ScrollView(this); chatScroll.addView(chatBox)
-        chatScroll.layoutParams = lp(-1, 0, 0); (chatScroll.layoutParams as LinearLayout.LayoutParams).weight = 1f
+        chatScroll = ScrollView(this); chatScroll.addView(chatBox); chatScroll.layoutParams = lp(-1, 0, 0); wt(chatScroll, 1f)
         msgField = EditText(this); msgField.hint = "Сообщение... (/reset ИМЯ)"
         val imgBtn = Button(this); imgBtn.text = "📷 Фото"
         val sendBtn = Button(this); sendBtn.text = "Отправить"
@@ -374,6 +404,7 @@ class MainActivity : Activity() {
         imgBtn.setOnClickListener { photoTarget = "chat"; pickImage() }
         connectBtn.setOnClickListener {
             val ip = ipField.text.toString(); val n = me()
+            prefs.edit().putString("chat_ip", ip).putString("chat_name", n).apply()
             handler.post { chatBox.removeAllViews() }; buf.setLength(0)
             Thread {
                 try {
@@ -422,7 +453,7 @@ class MainActivity : Activity() {
                 val b64 = Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)
                 if (photoTarget == "feed") {
                     if (feedId.isEmpty()) { feedStatus.text = "сначала вход в ленту"; return }
-                    Thread { FeedApi.post(host(), feedId, "", b64); handler.post { reloadFeed() } }.start()
+                    Thread { FeedApi.post(host(), feedId, "", b64); handler.post { refreshFeedAsync() } }.start()
                 } else {
                     if (out == null) { addTextLine("=== нет подключения ==="); return }
                     dispatch("[${now()}] [${me()}] ", b64)
