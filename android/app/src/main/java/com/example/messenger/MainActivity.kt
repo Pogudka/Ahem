@@ -63,7 +63,6 @@ object Crypto {
             String(c.doFinal(d.copyOfRange(12, d.size)))
         }
     } catch (e: Exception) { null }
-    fun fingerprint(key: ByteArray): String = hex(sha256(key).copyOfRange(0, 4))
     fun safePrime(bits: Int): BigInteger {
         val r = SecureRandom()
         while (true) {
@@ -84,6 +83,7 @@ class MainActivity : Activity() {
     private lateinit var msgField: EditText
     @Volatile private var out: java.io.OutputStream? = null
     @Volatile private var socket: Socket? = null
+    @Volatile private var generation = 0
     private val buf = StringBuilder()
     private val sessions = mutableMapOf<String, Session>()
     private val pendingA = mutableMapOf<String, BigInteger>()
@@ -129,24 +129,25 @@ class MainActivity : Activity() {
         secretBtn.setOnClickListener {
             val peer = peerField.text.toString()
             if (peer.isEmpty()) { addTextLine("укажи собеседника"); return@setOnClickListener }
-            if (sessions.containsKey(peer)) {
+            synchronized(sessions) {
+                if (sessions.containsKey(peer)) {
+                    currentPeer = peer
+                    addTextLine("сессия с $peer уже активна")
+                    return@setOnClickListener
+                }
+                if (pendingA.containsKey(peer)) {
+                    currentPeer = peer
+                    addTextLine("запрос ключа $peer уже в полёте, ждём...")
+                    return@setOnClickListener
+                }
                 currentPeer = peer
-                addTextLine("сессия с $peer уже активна")
-                return@setOnClickListener
             }
-            if (pendingA.containsKey(peer)) {
-                currentPeer = peer
-                addTextLine("запрос ключа $peer уже в полёте, ждём...")
-                return@setOnClickListener
-            }
-            currentPeer = peer
             Thread {
                 val p = Crypto.safePrime(1024)
                 val g = BigInteger.valueOf(2)
                 val a = BigInteger(256, SecureRandom())
                 val A = g.modPow(a, p)
-                pendingA[peer] = a
-                pendingP[peer] = p
+                synchronized(sessions) { pendingA[peer] = a; pendingP[peer] = p }
                 sendLine("@$peer DHREQ ${me()} ${p.toString(16)} ${g.toString(16)} ${A.toString(16)}")
                 addTextLine("предложение ключа отправлено $peer...")
             }.start()
@@ -157,11 +158,14 @@ class MainActivity : Activity() {
         connectBtn.setOnClickListener {
             val ip = ipField.text.toString()
             val n = me()
+            val myGen = ++generation
+            try { socket?.close() } catch (_: Exception) {}
             handler.post { chatBox.removeAllViews() }
             buf.setLength(0)
             Thread {
                 try {
                     val s = Socket(ip, 9999)
+                    if (myGen != generation) { try { s.close() } catch (_: Exception) {}; return@Thread }
                     socket = s
                     out = s.getOutputStream()
                     sendLine("REG $n")
@@ -170,20 +174,20 @@ class MainActivity : Activity() {
                     while (true) {
                         val nn = s.getInputStream().read(b)
                         if (nn <= 0) break
+                        if (myGen != generation) break
                         handler.post { addText(String(b, 0, nn)) }
                     }
-                    out = null; socket = null
-                    addTextLine("=== оффлайн ===")
                 } catch (e: Exception) {
-                    out = null; socket = null
-                    addTextLine("=== ошибка: " + e.message + " ===")
+                    if (myGen == generation) addTextLine("=== ошибка: " + e.message + " ===")
                 }
+                if (myGen == generation) { out = null; socket = null; addTextLine("=== оффлайн ===") }
             }.start()
         }
         sendBtn.setOnClickListener {
             val t = msgField.text.toString()
             if (t.isEmpty()) return@setOnClickListener
             if (t == "/exit") {
+                generation++
                 try { socket?.close() } catch (_: Exception) {}
                 out = null; socket = null
                 addTextLine("=== ты вышел из чата ===")
@@ -192,13 +196,15 @@ class MainActivity : Activity() {
             }
             if (t.startsWith("/reset ")) {
                 val peer = t.substring(7)
-                sessions.remove(peer); pendingA.remove(peer); pendingP.remove(peer)
+                synchronized(sessions) {
+                    sessions.remove(peer); pendingA.remove(peer); pendingP.remove(peer)
+                }
                 if (currentPeer == peer) currentPeer = ""
                 addTextLine("сессия с $peer сброшена")
                 msgField.setText("")
                 return@setOnClickListener
             }
-            if (out == null) { addTextLine("=== нет подключения ==="); return@setOnClickListener }
+            if (out == null) { addTextLine("=== нет подключения: нажми Подключиться ==="); return@setOnClickListener }
             val body = "[${now()}] [${me()}] $t"
             dispatch(body)
             msgField.setText("")
@@ -207,7 +213,7 @@ class MainActivity : Activity() {
 
     private fun dispatch(body: String, b64: String? = null) {
         val payload = if (b64 != null) body + "[IMG:$b64]" else body
-        val s = sessions[currentPeer]
+        val s = synchronized(sessions) { sessions[currentPeer] }
         if (currentPeer.isNotEmpty() && s != null) {
             s.sendN++
             val (next, mk) = Crypto.step(s.sendCk, s.sendN)
@@ -283,7 +289,7 @@ class MainActivity : Activity() {
             "DHREQ" -> {
                 if (parts.size < 5) return
                 val from = parts[1]
-                if (sessions.containsKey(from)) { addTextLine("🔑 сессия с $from уже есть, игнорирую"); return }
+                synchronized(sessions) { if (sessions.containsKey(from)) { addTextLine("🔑 сессия с $from уже есть, игнорирую"); return } }
                 val p = BigInteger(parts[2], 16)
                 val g = BigInteger(parts[3], 16)
                 val A = BigInteger(parts[4], 16)
@@ -292,7 +298,7 @@ class MainActivity : Activity() {
                     val B = g.modPow(b, p)
                     val shared = A.modPow(b, p)
                     val sharedHex = shared.toString(16)
-                    sessions[from] = Crypto.makeSession(sharedHex)
+                    synchronized(sessions) { sessions[from] = Crypto.makeSession(sharedHex) }
                     sendLine("@$from DHRES ${me()} ${B.toString(16)}")
                     addTextLine("🔐 ratchet-сессия с $from")
                 }.start()
@@ -301,11 +307,13 @@ class MainActivity : Activity() {
                 if (parts.size < 3) return
                 val from = parts[1]
                 val B = BigInteger(parts[2], 16)
-                val a = pendingA[from] ?: return
-                val p = pendingP[from] ?: return
+                val a = synchronized(sessions) { pendingA[from] } ?: return
+                val p = synchronized(sessions) { pendingP[from] } ?: return
                 val shared = B.modPow(a, p)
-                sessions[from] = Crypto.makeSession(shared.toString(16))
-                pendingA.remove(from); pendingP.remove(from)
+                synchronized(sessions) {
+                    sessions[from] = Crypto.makeSession(shared.toString(16))
+                    pendingA.remove(from); pendingP.remove(from)
+                }
                 addTextLine("🔐 ratchet-сессия с $from")
             }
             "DM" -> {
@@ -313,10 +321,10 @@ class MainActivity : Activity() {
                 val from = parts[1]
                 val n = parts[2].toLongOrNull() ?: return
                 val ct = parts[3]
-                val s = sessions[from]
+                val s = synchronized(sessions) { sessions[from] }
                 if (s == null) { addTextLine("🔒 нет сессии с $from"); return }
-                val d = decryptDM(s, n, ct)
-                if (d == null) addTextLine("🔒 рассинхрон цепочки с $from — сделай /reset $from")
+                val d = synchronized(sessions) { decryptDM(s, n, ct) }
+                if (d == null) addTextLine("🔒 рассинхрон цепочки с $from — /reset $from и заново /dm с обеих сторон")
                 else showContent(d)
             }
             "===" -> addTextLine(line)
