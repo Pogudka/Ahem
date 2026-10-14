@@ -131,7 +131,6 @@ class MainActivity : Activity() {
     private lateinit var tabs: Array<View>
     private lateinit var tabBtns: Array<Button>
 
-    // лента
     private lateinit var authBlock: LinearLayout
     private lateinit var feedBlock: LinearLayout
     private lateinit var feedHeader: TextView
@@ -150,7 +149,6 @@ class MainActivity : Activity() {
     private var feedLoggedNick = ""
     private val pendingImages = ArrayList<String>()
 
-    // чаты (только личные, в стиле Telegram)
     private lateinit var chatTabRoot: FrameLayout
     private lateinit var chatListRoot: LinearLayout
     private lateinit var convRoot: LinearLayout
@@ -289,7 +287,6 @@ class MainActivity : Activity() {
         } catch (e: Exception) { null }
     }
 
-    // ================= ЛЕНТА =================
     private fun buildFeed(): View {
         val col = LinearLayout(this); col.orientation = LinearLayout.VERTICAL; col.setPadding(16, 16, 16, 16)
         authBlock = LinearLayout(this); authBlock.orientation = LinearLayout.VERTICAL
@@ -452,7 +449,6 @@ class MainActivity : Activity() {
         show()
     }
 
-    // ================= ЧАТЫ (только личные, в стиле Telegram) =================
     private fun buildChats(): View {
         chatTabRoot = FrameLayout(this)
         chatListRoot = buildChatList()
@@ -640,7 +636,6 @@ class MainActivity : Activity() {
         saveSession(peer, s)
     }
 
-    // ================= ВИДЕО / ПРОФИЛЬ =================
     private fun buildVideo(): View {
         val col = LinearLayout(this); col.orientation = LinearLayout.VERTICAL; col.setPadding(16, 16, 16, 16)
         val tv = TextView(this); tv.text = "🎬 Видео\n\nЗдесь появится лента клипов — свайп вверх/вниз.\nСкоро."
@@ -664,10 +659,7 @@ class MainActivity : Activity() {
         if (requestCode == PICK_IMAGE) {
             val uri = data.data ?: return
             val b64 = compressUri(uri, 320, 60) ?: return
-            if (currentChat.isEmpty() || !sessions.containsKey(currentChat)) {
-                // некуда слать — не в диалоге или нет secret
-                return
-            }
+            if (currentChat.isEmpty() || !sessions.containsKey(currentChat)) return
             sendCurrent("", b64)
         } else if (requestCode == PICK_IMAGES) {
             val uris = ArrayList<android.net.Uri>(); val clip = data.clipData
@@ -698,7 +690,7 @@ class MainActivity : Activity() {
                 val s = sessions[from]; if (s == null) { storeAndShow(from, "sys:🔒 нет сессии"); return }
                 val d = decryptDM(s, n, ct); saveSession(from, s)
                 if (d == null) storeAndShow(from, "sys:🔒 рассинхрон — открой и нажми 🔐 заново") else showContentInto(from, d!!) }
-            else -> { /* игнор широковещательных сообщений (общий чат убран) */ }
+            else -> { }
         }
     }
     private fun showContentInto(chat: String, d: String) {
