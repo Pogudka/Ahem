@@ -80,11 +80,9 @@ object Crypto {
     }
 }
 
-// ====== ЛЕНТА: байтовое буферизированное чтение + UTF-8 (чинит 5мин/mojibake/лайки/вылет) ======
 object FeedApi {
     private const val BUFSZ = 65536
     private fun drain(acc: ByteArrayOutputStream, ins: java.io.InputStream, needNewline: Boolean): Boolean {
-        // читает блоками; возвращает false при eof. Если needNewline - останавливается после первого '\n' в acc.
         val chunk = ByteArray(BUFSZ)
         while (true) {
             val n = ins.read(chunk)
@@ -206,7 +204,6 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // страховка: пишем stacktrace вылета в crash.txt, чтобы диагностировать без adb
         val prev = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { t, e ->
             try {
@@ -413,7 +410,7 @@ class MainActivity : Activity() {
             try { addPostCard(ln) } catch (e: Exception) { val tv = TextView(this); tv.text = "🔒 пост повреждён (len=${ln.length})"; feedBox.addView(tv) }
             any = true
         }
-        if (!any) { val tv = TextView(this); tv.text = "лента пуста (или нет связи) — подпишись / напиши пост"; feedBox.addView(tv) }
+        if (!any) { val tv = TextView(this); tv.text = "лента пуста — подпишись или напиши пост"; feedBox.addView(tv) }
         feedScroll.post { feedScroll.fullScroll(View.FOCUS_DOWN) }
     }
 
@@ -508,8 +505,8 @@ class MainActivity : Activity() {
             bmp = b; val vw = img.width; val vh = img.height
             if (vw == 0 || vh == 0) { img.post { setup(b) }; return }
             val fit = minOf(vw.toFloat() / b.width, vh.toFloat() / b.height)
-            if (fit >= 1f) { minS = 1f; maxS = 1f; scale = 1f }   // маленькое фото: показ 1:1, зум выкл
-            else { minS = fit; maxS = 1f; scale = fit }            // крупное: от вписывания до 1:1 пикселя
+            if (fit >= 1f) { minS = 1f; maxS = 1f; scale = 1f }
+            else { minS = fit; maxS = 1f; scale = fit }
             panX = 0f; panY = 0f; apply()
         }
         fun show() {
@@ -530,7 +527,7 @@ class MainActivity : Activity() {
         })
         val gd = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
             override fun onDown(e: MotionEvent) = true
-            override fun onScroll(e1: MotionEvent, e2: MotionEvent, dx: Float, dy: Float): Boolean {
+            override fun onScroll(e1: MotionEvent?, e2: MotionEvent, dx: Float, dy: Float): Boolean {
                 if (scale > minS + 0.001f) { panX -= dx; panY -= dy; apply() }
                 return true
             }
@@ -544,7 +541,7 @@ class MainActivity : Activity() {
     private fun buildVideo(): View {
         val col = LinearLayout(this); col.orientation = LinearLayout.VERTICAL; col.setPadding(16, 16, 16, 16)
         val tv = TextView(this)
-        tv.text = "🎬 Видео-лента (TikTok-стиль)\n\nКирпич 2: вертикальные клипы свайпом, файлы на сервере по URL, ExoPlayer.\nТранскод/CDN — после переезда на ПК."
+        tv.text = "🎬 Видео\n\nЗдесь появится лента клипов — свайп вверх/вниз.\nСкоро."
         col.addView(tv); return col
     }
 
@@ -559,8 +556,7 @@ class MainActivity : Activity() {
             "👤 Профиль\n\n" +
             "Лента: @${if (feedLoggedNick.isEmpty()) "—" else feedLoggedNick} (id ${if (feedId.isEmpty()) "—" else feedId})\n" +
             "Чат: ${if (chatName.isEmpty()) "—" else chatName}\n\n" +
-            "Кирпич 3: аватар, био, OAuth Google/Яндекс/Mail — после haipuch.ru + HTTPS.\n" +
-            "Лента и Чаты — два входа; держи одинаковый ник, чтобы выглядеть одним аккаунтом."
+            "Настройки, аватар и био появятся здесь."
     }
 
     // ================= ЧАТ =================
