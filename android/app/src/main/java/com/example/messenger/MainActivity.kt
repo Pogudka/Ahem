@@ -1,6 +1,7 @@
 package com.example.messenger
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -28,6 +29,8 @@ import javax.crypto.spec.SecretKeySpec
 const val MASTER_KEY = "ludarex-babylon-2026"
 const val CHAT_PORT = 9999
 const val FEED_PORT = 8080
+const val FEED_MAX_W = 1280
+const val FEED_QUALITY = 85
 
 class Session(var sendCk: ByteArray, var recvCk: ByteArray, var sendN: Long = 0, var recvN: Long = 0)
 
@@ -72,7 +75,6 @@ object Crypto {
     }
 }
 
-// ВСЕ сетевые вызовы ленты защищены: нет сервера -> строка ERR|..., а не вылет.
 object FeedApi {
     private fun readLine(acc: StringBuilder, ins: java.io.InputStream): String? {
         while (true) {
@@ -98,7 +100,7 @@ object FeedApi {
             s.getOutputStream().write((req + "\n").toByteArray()); s.getOutputStream().flush()
             val acc = StringBuilder()
             while (true) { val l = readLine(acc, s.getInputStream()) ?: break; if (l == "END") break; out.add(l) }
-        } catch (e: Exception) { /* пусто = нет связи */ }
+        } catch (e: Exception) { }
         finally { try { s?.close() } catch (_: Exception) {} }
         return out
     }
@@ -125,12 +127,16 @@ class MainActivity : Activity() {
     private lateinit var feedNick: EditText
     private lateinit var feedPass: EditText
     private lateinit var feedStatus: TextView
+    private lateinit var pendingWrap: LinearLayout
+    private lateinit var pendingInfo: TextView
+    private lateinit var pendingRow: LinearLayout
     private lateinit var feedPostText: EditText
     private lateinit var feedFollowNick: EditText
     private lateinit var feedBox: LinearLayout
     private lateinit var feedScroll: ScrollView
     private var feedId = ""
     private var feedLoggedNick = ""
+    private val pendingImages = ArrayList<String>()
 
     // чат
     private lateinit var chatBox: LinearLayout
@@ -148,7 +154,8 @@ class MainActivity : Activity() {
     private var currentPeer = ""
 
     private lateinit var profileText: TextView
-    private val PICK_IMAGE = 1001
+    private val PICK_IMAGE = 1001      // чат: одиночное
+    private val PICK_IMAGES = 1002     // лента: несколько
     private var photoTarget = "chat"
 
     private fun now() = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
@@ -195,16 +202,36 @@ class MainActivity : Activity() {
         if (i == 3) refreshProfile()
     }
 
+    // ---------- декод с downsampling (миниатюры не жрут память) ----------
+    private fun decodeSampled(bytes: ByteArray, reqW: Int): Bitmap? {
+        val o = BitmapFactory.Options(); o.inJustDecodeBounds = true
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, o)
+        if (o.outWidth <= 0) return null
+        var s = 1
+        while (o.outWidth / s / 2 >= reqW) s *= 2
+        val o2 = BitmapFactory.Options(); o2.inSampleSize = s
+        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, o2)
+    }
+    private fun decodeB64(b64: String, reqW: Int): Bitmap? {
+        val bytes = try { Base64.decode(b64, Base64.NO_WRAP) } catch (e: Exception) { return null }
+        return decodeSampled(bytes, reqW)
+    }
+    // сжать uri -> high-res base64 (до FEED_MAX_W, q FEED_QUALITY)
+    private fun compressUri(uri: android.net.Uri, maxW: Int, quality: Int): String? = try {
+        val ins = contentResolver.openInputStream(uri) ?: return null
+        val bmp = BitmapFactory.decodeStream(ins); ins.close()
+        val scaled = if (bmp.width > maxW) Bitmap.createScaledBitmap(bmp, maxW, maxW * bmp.height / bmp.width, true) else bmp
+        val baos = ByteArrayOutputStream(); scaled.compress(Bitmap.CompressFormat.JPEG, quality, baos)
+        Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)
+    } catch (e: Exception) { null }
+
     // ================= ЛЕНТА =================
     private fun buildFeed(): View {
         val col = LinearLayout(this); col.orientation = LinearLayout.VERTICAL; col.setPadding(16, 16, 16, 16)
 
-        // --- блок авторизации (прячется после входа) ---
         authBlock = LinearLayout(this); authBlock.orientation = LinearLayout.VERTICAL
-        feedEmail = EditText(this); feedEmail.hint = "email (логин ленты)"
-        feedEmail.setText(prefs.getString("feed_email", ""))
-        feedNick = EditText(this); feedNick.hint = "ник"
-        feedNick.setText(prefs.getString("feed_nick", ""))
+        feedEmail = EditText(this); feedEmail.hint = "email (логин ленты)"; feedEmail.setText(prefs.getString("feed_email", ""))
+        feedNick = EditText(this); feedNick.hint = "ник"; feedNick.setText(prefs.getString("feed_nick", ""))
         feedPass = EditText(this); feedPass.hint = "пароль"; feedPass.inputType = 1
         val rowAuth = LinearLayout(this); rowAuth.orientation = LinearLayout.HORIZONTAL
         val regBtn = Button(this); regBtn.text = "Регистрация"; regBtn.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0); wt(regBtn, 1f)
@@ -214,16 +241,26 @@ class MainActivity : Activity() {
         authBlock.addView(feedEmail); authBlock.addView(feedNick); authBlock.addView(feedPass)
         authBlock.addView(rowAuth); authBlock.addView(feedStatus)
 
-        // --- блок публикации + ленты (сверху после входа) ---
         feedBlock = LinearLayout(this); feedBlock.orientation = LinearLayout.VERTICAL
         val headerRow = LinearLayout(this); headerRow.orientation = LinearLayout.HORIZONTAL
         feedHeader = TextView(this); feedHeader.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0); wt(feedHeader, 1f)
         val switchBtn = Button(this); switchBtn.text = "сменить"; switchBtn.layoutParams = lp(-2, -2, 0)
         headerRow.addView(feedHeader); headerRow.addView(switchBtn)
-        feedPostText = EditText(this); feedPostText.hint = "Новый пост (без символа |)"
+
+        // предпросмотр выбранных фото
+        pendingWrap = LinearLayout(this); pendingWrap.orientation = LinearLayout.VERTICAL; pendingWrap.visibility = View.GONE
+        val pendHead = LinearLayout(this); pendHead.orientation = LinearLayout.HORIZONTAL
+        pendingInfo = TextView(this); pendingInfo.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0); wt(pendingInfo, 1f)
+        val clearBtn = Button(this); clearBtn.text = "✖"; clearBtn.layoutParams = lp(-2, -2, 0)
+        pendHead.addView(pendingInfo); pendHead.addView(clearBtn)
+        val pendScroll = HorizontalScrollView(this); pendScroll.layoutParams = lp(-1, -2, 0)
+        pendingRow = LinearLayout(this); pendingRow.orientation = LinearLayout.HORIZONTAL; pendScroll.addView(pendingRow)
+        pendingWrap.addView(pendHead); pendingWrap.addView(pendScroll)
+
+        feedPostText = EditText(this); feedPostText.hint = "Подпись к посту (без символа |)"
         val rowPost = LinearLayout(this); rowPost.orientation = LinearLayout.HORIZONTAL
         val pubBtn = Button(this); pubBtn.text = "Опубликовать"; pubBtn.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0); wt(pubBtn, 2f)
-        val phBtn = Button(this); phBtn.text = "📷"; phBtn.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0); wt(phBtn, 1f)
+        val phBtn = Button(this); phBtn.text = "📷 несколько"; phBtn.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0); wt(phBtn, 1f)
         rowPost.addView(pubBtn); rowPost.addView(phBtn)
         val rowAct = LinearLayout(this); rowAct.orientation = LinearLayout.HORIZONTAL
         val feedBtn = Button(this); feedBtn.text = "⟳ Лента"; feedBtn.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0); wt(feedBtn, 1f)
@@ -232,8 +269,8 @@ class MainActivity : Activity() {
         rowAct.addView(feedBtn); rowAct.addView(feedFollowNick); rowAct.addView(folBtn)
         feedBox = LinearLayout(this); feedBox.orientation = LinearLayout.VERTICAL
         feedScroll = ScrollView(this); feedScroll.addView(feedBox); feedScroll.layoutParams = lp(-1, 0, 0); wt(feedScroll, 1f)
-        feedBlock.addView(headerRow); feedBlock.addView(feedPostText); feedBlock.addView(rowPost)
-        feedBlock.addView(rowAct); feedBlock.addView(feedScroll)
+        feedBlock.addView(headerRow); feedBlock.addView(pendingWrap); feedBlock.addView(feedPostText)
+        feedBlock.addView(rowPost); feedBlock.addView(rowAct); feedBlock.addView(feedScroll)
         feedBlock.visibility = View.GONE
 
         regBtn.setOnClickListener {
@@ -265,15 +302,18 @@ class MainActivity : Activity() {
             }.start()
         }
         switchBtn.setOnClickListener { exitFeedMode() }
+        clearBtn.setOnClickListener { pendingImages.clear(); renderPending() }
+        phBtn.setOnClickListener {
+            if (feedId.isEmpty()) return@setOnClickListener
+            photoTarget = "feed"; pickImages()
+        }
         pubBtn.setOnClickListener {
             if (feedId.isEmpty()) return@setOnClickListener
             val body = feedPostText.text.toString().replace("|", "/")
-            Thread { FeedApi.post(host(), feedId, body); handler.post { refreshFeedAsync() } }.start()
+            val img = pendingImages.joinToString(",")
+            if (body.isEmpty() && img.isEmpty()) return@setOnClickListener
+            Thread { FeedApi.post(host(), feedId, body, img); handler.post { pendingImages.clear(); renderPending(); refreshFeedAsync() } }.start()
             feedPostText.setText("")
-        }
-        phBtn.setOnClickListener {
-            if (feedId.isEmpty()) return@setOnClickListener
-            photoTarget = "feed"; pickImage()
         }
         feedBtn.setOnClickListener { if (feedId.isNotEmpty()) refreshFeedAsync() }
         folBtn.setOnClickListener {
@@ -288,29 +328,34 @@ class MainActivity : Activity() {
     }
 
     private fun enterFeedMode() {
-        authBlock.visibility = View.GONE
-        feedBlock.visibility = View.VISIBLE
-        feedHeader.text = "@$feedLoggedNick (id $feedId)"
-        refreshFeedAsync()
+        authBlock.visibility = View.GONE; feedBlock.visibility = View.VISIBLE
+        feedHeader.text = "@$feedLoggedNick (id $feedId)"; refreshFeedAsync()
     }
     private fun exitFeedMode() {
-        feedBlock.visibility = View.GONE
-        authBlock.visibility = View.VISIBLE
-        feedStatus.text = "не залогинен"
-        feedId = ""; feedLoggedNick = ""
+        feedBlock.visibility = View.GONE; authBlock.visibility = View.VISIBLE
+        feedStatus.text = "не залогинен"; feedId = ""; feedLoggedNick = ""
+        pendingImages.clear(); renderPending()
     }
-
-    // чтение ленты в фоне, отрисовка на main -> нет NetworkOnMainThread
+    private fun renderPending() {
+        pendingRow.removeAllViews()
+        if (pendingImages.isEmpty()) { pendingWrap.visibility = View.GONE; return }
+        pendingWrap.visibility = View.VISIBLE
+        pendingInfo.text = "выбрано фото: ${pendingImages.size}"
+        for (i in pendingImages.indices) {
+            val bmp = decodeB64(pendingImages[i], 160) ?: continue
+            val iv = ImageView(this); iv.setImageBitmap(bmp); iv.adjustViewBounds = true
+            iv.layoutParams = lp(dp(120), LinearLayout.LayoutParams.WRAP_CONTENT, 4)
+            val idx = i
+            iv.setOnClickListener { openViewer(pendingImages, idx) }
+            pendingRow.addView(iv)
+        }
+    }
     private fun refreshFeedAsync() {
         if (feedId.isEmpty()) return
-        Thread {
-            val lines = FeedApi.feed(host(), feedId)
-            handler.post { renderFeed(lines) }
-        }.start()
+        Thread { val lines = FeedApi.feed(host(), feedId); handler.post { renderFeed(lines) } }.start()
     }
     private fun renderFeed(lines: List<String>) {
-        feedBox.removeAllViews()
-        var any = false
+        feedBox.removeAllViews(); var any = false
         for (ln in lines) if (ln.startsWith("P|")) { addPostCard(ln); any = true }
         if (!any) { val tv = TextView(this); tv.text = "лента пуста (или нет связи) — подпишись / напиши пост"; feedBox.addView(tv) }
         feedScroll.post { feedScroll.fullScroll(View.FOCUS_DOWN) }
@@ -319,24 +364,30 @@ class MainActivity : Activity() {
     private fun addPostCard(line: String) {
         val rest = line.substring(2)
         val li = rest.lastIndexOf('|')
-        val postImg = if (li >= 0) rest.substring(li + 1) else ""
+        val rawImg = if (li >= 0) rest.substring(li + 1) else ""
         val head = if (li >= 0) rest.substring(0, li) else rest
         val hp = head.split("|")
         if (hp.size < 5) return
         val postId = hp[0]; val postNick = hp[1]; val postTs = hp[2]; val postLikes = hp[3]
         val postBody = if (hp.size > 4) hp.subList(4, hp.size).joinToString("|") else ""
+        val images = rawImg.split(",").filter { it.isNotEmpty() }
 
         val card = LinearLayout(this); card.orientation = LinearLayout.VERTICAL; card.setPadding(8, 8, 8, 8)
         card.layoutParams = lp(-1, LinearLayout.LayoutParams.WRAP_CONTENT, 8); card.setBackgroundColor(0xFFEEEEEE.toInt())
         val title = TextView(this); title.text = "[$postId] @$postNick  $postTs   ♥$postLikes"; card.addView(title)
         if (postBody.isNotEmpty()) { val bt = TextView(this); bt.text = postBody; bt.setPadding(0, 4, 0, 4); card.addView(bt) }
-        if (postImg.isNotEmpty()) {
-            val bytes = try { Base64.decode(postImg, Base64.NO_WRAP) } catch (e: Exception) { null }
-            val bmp = bytes?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
-            if (bmp != null) {
+        if (images.isNotEmpty()) {
+            val sc = HorizontalScrollView(this); sc.layoutParams = lp(-1, -2, 4)
+            val rowIv = LinearLayout(this); rowIv.orientation = LinearLayout.HORIZONTAL; sc.addView(rowIv)
+            for (i in images.indices) {
+                val bmp = decodeB64(images[i], 240) ?: continue
                 val iv = ImageView(this); iv.setImageBitmap(bmp); iv.adjustViewBounds = true
-                iv.layoutParams = lp(dp(220), LinearLayout.LayoutParams.WRAP_CONTENT, 4); card.addView(iv)
+                iv.layoutParams = lp(dp(200), LinearLayout.LayoutParams.WRAP_CONTENT, 4)
+                val idx = i
+                iv.setOnClickListener { openViewer(images, idx) }
+                rowIv.addView(iv)
             }
+            card.addView(sc)
         }
         val row = LinearLayout(this); row.orientation = LinearLayout.HORIZONTAL
         val likeBtn = Button(this); likeBtn.text = "♥"; likeBtn.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0); wt(likeBtn, 1f)
@@ -349,6 +400,32 @@ class MainActivity : Activity() {
         }
         card.addView(row)
         feedBox.addView(card)
+    }
+
+    // ---------- полноэкранный просмотрщик с ◀ ▶ ----------
+    private fun openViewer(images: List<String>, start: Int) {
+        if (images.isEmpty()) return
+        val wrap = LinearLayout(this); wrap.orientation = LinearLayout.VERTICAL; wrap.setPadding(8, 8, 8, 8)
+        val img = ImageView(this); img.scaleType = ImageView.ScaleType.FIT_CENTER
+        img.layoutParams = lp(-1, 0, 0); wt(img, 1f)
+        val bar = LinearLayout(this); bar.orientation = LinearLayout.HORIZONTAL
+        val prev = Button(this); prev.text = "◀"; prev.layoutParams = lp(0, -2, 0); wt(prev, 1f)
+        val cnt = TextView(this); cnt.gravity = Gravity.CENTER; cnt.layoutParams = lp(0, -2, 0); wt(cnt, 2f)
+        val next = Button(this); next.text = "▶"; next.layoutParams = lp(0, -2, 0); wt(next, 1f)
+        bar.addView(prev); bar.addView(cnt); bar.addView(next)
+        wrap.addView(img); wrap.addView(bar)
+
+        var idx = start.coerceIn(0, images.size - 1)
+        fun show() {
+            val bmp = decodeB64(images[idx], FEED_MAX_W)   // полное high-res качество
+            if (bmp != null) img.setImageBitmap(bmp)
+            cnt.text = "${idx + 1} / ${images.size}"
+            prev.isEnabled = idx > 0; next.isEnabled = idx < images.size - 1
+        }
+        prev.setOnClickListener { if (idx > 0) { idx--; show() } }
+        next.setOnClickListener { if (idx < images.size - 1) { idx++; show() } }
+        show()
+        AlertDialog.Builder(this).setView(wrap).setOnDismissListener { }.show()
     }
 
     // ================= ВИДЕО =================
@@ -374,7 +451,7 @@ class MainActivity : Activity() {
             "Лента и Чаты — два входа; держи одинаковый ник, чтобы выглядеть одним аккаунтом."
     }
 
-    // ================= ЧАТ =================
+    // ================= ЧАТ (без изменений) =================
     private fun buildChat(): View {
         val col = LinearLayout(this); col.orientation = LinearLayout.VERTICAL; col.setPadding(16, 16, 16, 16)
         ipField = EditText(this); ipField.hint = "IP сервера"; ipField.setText(prefs.getString("chat_ip", "127.0.0.1"))
@@ -430,6 +507,10 @@ class MainActivity : Activity() {
     }
 
     private fun pickImage() { startActivityForResult(Intent(Intent.ACTION_PICK, MediaStore.Images.Media.EXTERNAL_CONTENT_URI), PICK_IMAGE) }
+    private fun pickImages() {
+        val i = Intent(Intent.ACTION_GET_CONTENT); i.type = "image/*"; i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+        startActivityForResult(Intent.createChooser(i, "Выбери фото"), PICK_IMAGES)
+    }
 
     private fun dispatch(body: String, b64: String? = null) {
         val payload = if (b64 != null) body + "[IMG:$b64]" else body
@@ -444,21 +525,20 @@ class MainActivity : Activity() {
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == PICK_IMAGE && resultCode == RESULT_OK && data?.data != null) {
-            try {
-                val bmp = MediaStore.Images.Media.getBitmap(contentResolver, data.data!!)
-                val maxW = 320
-                val scaled = if (bmp.width > maxW) Bitmap.createScaledBitmap(bmp, maxW, maxW * bmp.height / bmp.width, true) else bmp
-                val baos = ByteArrayOutputStream(); scaled.compress(Bitmap.CompressFormat.JPEG, 60, baos)
-                val b64 = Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)
-                if (photoTarget == "feed") {
-                    if (feedId.isEmpty()) { feedStatus.text = "сначала вход в ленту"; return }
-                    Thread { FeedApi.post(host(), feedId, "", b64); handler.post { refreshFeedAsync() } }.start()
-                } else {
-                    if (out == null) { addTextLine("=== нет подключения ==="); return }
-                    dispatch("[${now()}] [${me()}] ", b64)
-                }
-            } catch (e: Exception) { if (photoTarget == "feed") feedStatus.text = "ошибка фото" else addTextLine("=== ошибка фото ===") }
+        if (resultCode != RESULT_OK || data == null) return
+        if (requestCode == PICK_IMAGE) {
+            val uri = data.data ?: return
+            if (out == null) { addTextLine("=== нет подключения ==="); return }
+            val b64 = compressUri(uri, 320, 60) ?: return
+            dispatch("[${now()}] [${me()}] ", b64)
+        } else if (requestCode == PICK_IMAGES) {
+            val uris = ArrayList<android.net.Uri>()
+            val clip = data.clipData
+            if (clip != null) { for (k in 0 until clip.itemCount) uris.add(clip.getItemAt(k).uri) }
+            else data.data?.let { uris.add(it) }
+            if (uris.isEmpty()) return
+            for (u in uris) { val b64 = compressUri(u, FEED_MAX_W, FEED_QUALITY); if (b64 != null) pendingImages.add(b64) }
+            renderPending()
         }
     }
 
@@ -470,7 +550,7 @@ class MainActivity : Activity() {
         }
     }
     private fun addImageView(b64: String) {
-        val bytes = Base64.decode(b64, Base64.NO_WRAP); val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return
+        val bmp = decodeB64(b64, 240) ?: return
         val iv = ImageView(this); iv.setImageBitmap(bmp); iv.adjustViewBounds = true
         iv.layoutParams = lp(dp(240), LinearLayout.LayoutParams.WRAP_CONTENT, 8)
         chatBox.addView(iv); chatScroll.post { chatScroll.fullScroll(View.FOCUS_DOWN) }
