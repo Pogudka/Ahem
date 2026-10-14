@@ -130,7 +130,6 @@ class MainActivity : Activity() {
             val n = me()
             handler.post { chatBox.removeAllViews() }
             buf.setLength(0)
-            sessionKeys.clear(); pendingA.clear(); pendingP.clear(); currentPeer = ""
             Thread {
                 try {
                     val s = Socket(ip, 9999)
