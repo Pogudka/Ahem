@@ -27,7 +27,6 @@ void sendAllBytes(int sock, const char* data, size_t len) {
 void sendAllBytes(int sock, const std::string& s) { sendAllBytes(sock, s.c_str(), s.size()); }
 bool toInt(const std::string& s, int& out) { try { out = std::stoi(s); return true; } catch (...) { return false; } }
 
-// ================= ЧАТ =================
 std::map<std::string, int> nameToSock;
 std::mutex nameMtx;
 std::vector<int> clients;
@@ -78,7 +77,6 @@ void chatLoop() {
     while (true) { int c = accept(ss, nullptr, nullptr); if (c < 0) continue; std::thread(handleChat, c).detach(); }
 }
 
-// ================= ЛЕНТА / АККАУНТЫ =================
 const std::string DB_USERS = "users.dat";
 const std::string DB_POSTS = "posts.dat";
 const std::string DB_EDGES = "edges.dat";
@@ -104,16 +102,13 @@ void saveDB() {
 }
 void loadDB() {
     { std::ifstream f(DB_USERS); std::string ln;
-      while (std::getline(f, ln)) { auto v = splitPipe(ln); if (v.size() >= 4) { int id; if (!toInt(v[0], id)) { std::cout << "[db] skip bad user\n"; continue; }
+      while (std::getline(f, ln)) { auto v = splitPipe(ln); if (v.size() >= 4) { int id; if (!toInt(v[0], id)) continue;
           User u; u.id = id; u.email = v[1]; u.nick = v[2]; u.phash = v[3]; users.push_back(u); if (u.id >= nextUid) nextUid = u.id + 1; } } }
     { std::ifstream f(DB_POSTS); std::string ln;
       while (std::getline(f, ln)) { auto v = splitPipe(ln);
-          // ФИКС: текстовый пост хранится как id|author|ts|text| (пустой хвост=img теряется splitPipe)
-          // поэтому принимаем и 4-полевые строки, img = "" если 5-го токена нет
-          if (v.size() >= 4) { int id, au; if (!toInt(v[0], id) || !toInt(v[1], au)) { std::cout << "[db] skip bad post id\n"; continue; }
+          if (v.size() >= 4) { int id, au; if (!toInt(v[0], id) || !toInt(v[1], au)) continue;
               Post p; p.id = id; p.author = au; p.ts = v[2]; p.text = v[3]; p.img = (v.size() >= 5) ? v[4] : "";
-              posts.push_back(p); if (p.id >= nextPid) nextPid = p.id + 1; }
-          else if (!ln.empty()) std::cout << "[db] skip short post line\n"; } }
+              posts.push_back(p); if (p.id >= nextPid) nextPid = p.id + 1; } } }
     { std::ifstream f(DB_EDGES); std::string ln;
       while (std::getline(f, ln)) { auto v = splitPipe(ln); if (v.size() >= 3) { int a, b; if (!toInt(v[1], a) || !toInt(v[2], b)) continue;
           if (v[0] == "F") follows.push_back({ a, b }); else if (v[0] == "L") likes.push_back({ a, b }); } } }
@@ -144,7 +139,7 @@ void feedCmd(int sock, const std::string& line) {
         if (!findUser(aid)) { sendStr(sock, "ERR|nouser"); return; }
         Post p; p.id = nextPid++; p.author = aid; p.ts = tsNow(); p.text = v[2]; p.img = (v.size() >= 4) ? v[3] : "";
         posts.push_back(p); saveDB();
-        std::cout << "[feed] post #" << p.id << " by @" << nickOf(aid) << " img=" << p.img.size() << "b txt=" << p.text.size() << "b\n";
+        std::cout << "[feed] post #" << p.id << " txt=" << p.text.size() << "b img=" << p.img.size() << "b\n";
         sendStr(sock, "OK|" + std::to_string(p.id));
     } else if (cmd == "FEED" || cmd == "ALL") {
         if (v.size() < 2) { sendStr(sock, "ERR|fields"); return; }
@@ -208,7 +203,7 @@ void feedLoop() {
 
 int main() {
     loadDB();
-    std::cout << "=== Ludarex v3.4 (fix text-post roundtrip) === чат:" << CHAT_PORT << " лента:" << FEED_PORT
+    std::cout << "=== Ludarex v3.4 === чат:" << CHAT_PORT << " лента:" << FEED_PORT
               << " | юзеров:" << users.size() << " постов:" << posts.size() << "\n";
     std::thread(feedLoop).detach();
     chatLoop();
