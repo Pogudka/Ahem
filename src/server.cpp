@@ -25,6 +25,11 @@ void sendTo(const std::string& name, const std::string& t) {
     auto it = nameToSock.find(name);
     if (it != nameToSock.end()) send(it->second, t.c_str(), t.size(), 0);
 }
+void dropFromClients(int s) {
+    std::lock_guard<std::mutex> lk(clientsMtx);
+    for (size_t i = 0; i < clients.size(); i++)
+        if (clients[i] == s) { clients.erase(clients.begin() + i); return; }
+}
 void handleClient(int sock) {
     std::string acc;
     char buf[8192];
@@ -42,7 +47,14 @@ void handleClient(int sock) {
             if (!registered) {
                 if (line.rfind("REG ", 0) == 0) {
                     myName = line.substr(4);
-                    { std::lock_guard<std::mutex> lk(nameMtx); nameToSock[myName] = sock; }
+                    int old = -1;
+                    {
+                        std::lock_guard<std::mutex> lk(nameMtx);
+                        auto it = nameToSock.find(myName);
+                        if (it != nameToSock.end() && it->second != sock) { old = it->second; it->second = sock; }
+                        else nameToSock[myName] = sock;
+                    }
+                    if (old != -1) { dropFromClients(old); shutdown(old, SHUT_RDWR); }
                     { std::lock_guard<std::mutex> lk(clientsMtx); clients.push_back(sock); }
                     registered = true;
                     sendAll("=== " + myName + " в сети ===\n");
@@ -60,14 +72,18 @@ void handleClient(int sock) {
             }
         }
     }
-    { std::lock_guard<std::mutex> lk(nameMtx); if (!myName.empty()) nameToSock.erase(myName); }
-    { std::lock_guard<std::mutex> lk(clientsMtx);
-      for (size_t i = 0; i < clients.size(); i++) if (clients[i] == sock) { clients.erase(clients.begin() + i); break; } }
-    if (!myName.empty()) sendAll("=== " + myName + " вышел ===\n");
+    bool wasActive = false;
+    {
+        std::lock_guard<std::mutex> lk(nameMtx);
+        auto it = nameToSock.find(myName);
+        if (it != nameToSock.end() && it->second == sock) { nameToSock.erase(it); wasActive = !myName.empty(); }
+    }
+    dropFromClients(sock);
+    if (wasActive) sendAll("=== " + myName + " вышел ===\n");
     close(sock);
 }
 int main() {
-    std::cout << "=== СЕРВЕР Ludarex v3.0 (маршрутизатор, слепой) ===\n";
+    std::cout << "=== СЕРВЕР Ludarex v3.1 (маршрутизатор, kick старых сессий) ===\n";
     int ss = socket(AF_INET, SOCK_STREAM, 0);
     int yes = 1; setsockopt(ss, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
     sockaddr_in a{}; a.sin_family = AF_INET; a.sin_addr.s_addr = INADDR_ANY; a.sin_port = htons(PORT);
