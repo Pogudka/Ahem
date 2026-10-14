@@ -37,7 +37,6 @@ const val FEED_PORT = 8080
 const val FEED_MAX_W = 1024
 const val FEED_QUALITY = 80
 const val ZOOM_MAX = 3f
-const val CHAT_GENERAL = "GENERAL"
 
 class Session(var sendCk: ByteArray, var recvCk: ByteArray, var sendN: Long = 0, var recvN: Long = 0)
 
@@ -151,7 +150,7 @@ class MainActivity : Activity() {
     private var feedLoggedNick = ""
     private val pendingImages = ArrayList<String>()
 
-    // чаты (telegram-style)
+    // чаты (только личные, в стиле Telegram)
     private lateinit var chatTabRoot: FrameLayout
     private lateinit var chatListRoot: LinearLayout
     private lateinit var convRoot: LinearLayout
@@ -175,7 +174,7 @@ class MainActivity : Activity() {
     private val previews = mutableMapOf<String, String>()
     private val leftChats = mutableSetOf<String>()
     private val knownNames = LinkedHashSet<String>()
-    private var currentChat = CHAT_GENERAL
+    private var currentChat = ""
 
     private lateinit var profileText: TextView
     private val PICK_IMAGE = 1001
@@ -188,7 +187,6 @@ class MainActivity : Activity() {
     private fun host() = ipField.text.toString().ifEmpty { "127.0.0.1" }
     private fun lp(w: Int, h: Int, margin: Int = 0): LinearLayout.LayoutParams { val p = LinearLayout.LayoutParams(w, h); p.bottomMargin = margin; return p }
     private fun wt(v: View, w: Float) { (v.layoutParams as LinearLayout.LayoutParams).weight = w }
-    private fun displayName(chat: String) = if (chat == CHAT_GENERAL) "🌐 Общий чат" else chat
     private fun safeName(s: String) = s.replace(Regex("[^A-Za-z0-9а-яА-Я_]"), "_")
     private fun histFile(chat: String) = File(filesDir, "chat_" + safeName(chat) + ".hist")
     private fun loadHist(chat: String): ArrayList<String> {
@@ -454,7 +452,7 @@ class MainActivity : Activity() {
         show()
     }
 
-    // ================= ЧАТЫ (telegram-style) =================
+    // ================= ЧАТЫ (только личные, в стиле Telegram) =================
     private fun buildChats(): View {
         chatTabRoot = FrameLayout(this)
         chatListRoot = buildChatList()
@@ -488,7 +486,6 @@ class MainActivity : Activity() {
                 try {
                     val s = Socket(ip, CHAT_PORT); socket = s; out = s.getOutputStream()
                     sendLine("REG $n"); handler.post { chatStatus.text = "подключено как $n" }
-                    storeAndShow(CHAT_GENERAL, "sys:=== подключено ===")
                     val b = ByteArray(8192)
                     while (true) { val nn = s.getInputStream().read(b); if (nn <= 0) break; handler.post { addText(String(b, 0, nn, Charsets.UTF_8)) } }
                     out = null; socket = null; handler.post { chatStatus.text = "не подключено" }
@@ -518,14 +515,12 @@ class MainActivity : Activity() {
 
         backBtn.setOnClickListener { backToList() }
         leaveBtn.setOnClickListener {
-            val c = currentChat
-            if (c == CHAT_GENERAL) { storeAndShow(c, "sys:нельзя выйти из общего чата"); return@setOnClickListener }
+            val c = currentChat; if (c.isEmpty()) return@setOnClickListener
             leftChats.add(c); prefs.edit().putStringSet("left_chats", HashSet(leftChats)).apply()
             backToList()
         }
         secretBtn.setOnClickListener {
-            val peer = currentChat
-            if (peer == CHAT_GENERAL) { storeAndShow(peer, "sys:secret только для личных чатов"); return@setOnClickListener }
+            val peer = currentChat; if (peer.isEmpty()) return@setOnClickListener
             startSecret(peer)
         }
         imgBtn.setOnClickListener { photoTarget = "chat"; pickImage() }
@@ -540,18 +535,19 @@ class MainActivity : Activity() {
     private fun refreshChatList() {
         if (!::chatListRows.isInitialized) return
         chatListRows.removeAllViews()
-        addChatRow(CHAT_GENERAL)
         for (chat in histories.keys.toList()) {
-            if (chat == CHAT_GENERAL) continue
             if (leftChats.contains(chat)) continue
             addChatRow(chat)
+        }
+        if (histories.isEmpty()) {
+            val tv = TextView(this); tv.text = "нет диалогов — найди человека через 🔍"; chatListRows.addView(tv)
         }
     }
     private fun addChatRow(chat: String) {
         loadHist(chat)
         val row = LinearLayout(this); row.orientation = LinearLayout.VERTICAL; row.setPadding(8, 8, 8, 8)
         row.layoutParams = lp(-1, LinearLayout.LayoutParams.WRAP_CONTENT, 8); row.setBackgroundColor(0xFFEEEEEE.toInt())
-        val t = TextView(this); t.text = displayName(chat); t.textSize = 16f; row.addView(t)
+        val t = TextView(this); t.text = chat; t.textSize = 16f; row.addView(t)
         val p = TextView(this); p.text = previews[chat] ?: (loadHist(chat).lastOrNull()?.let { previewOf(it) } ?: "нет сообщений"); p.setTextColor(0xFF666666.toInt()); row.addView(p)
         row.setOnClickListener { openConversation(chat) }
         chatListRows.addView(row)
@@ -562,19 +558,19 @@ class MainActivity : Activity() {
         loadHist(chat)
         convBox.removeAllViews()
         for (tok in loadHist(chat)) renderToken(convBox, tok)
-        convTitle.text = displayName(chat)
+        convTitle.text = chat
         chatListRoot.visibility = View.GONE; convRoot.visibility = View.VISIBLE
         convScroll.post { convScroll.fullScroll(View.FOCUS_DOWN) }
-        if (chat != CHAT_GENERAL && out != null && !sessions.containsKey(chat) && !pendingA.containsKey(chat)) startSecret(chat)
+        if (out != null && !sessions.containsKey(chat) && !pendingA.containsKey(chat)) startSecret(chat)
     }
-    private fun backToList() { currentChat = CHAT_GENERAL; convRoot.visibility = View.GONE; chatListRoot.visibility = View.VISIBLE; refreshChatList() }
+    private fun backToList() { currentChat = ""; convRoot.visibility = View.GONE; chatListRoot.visibility = View.VISIBLE; refreshChatList() }
     private fun doSearch(q: String) {
         searchResults.removeAllViews()
         val query = q.trim().lowercase()
         if (query.isEmpty()) return
         val found = LinkedHashSet<String>()
         for (n in knownNames) if (n.lowercase().contains(query)) found.add(n)
-        for (chat in histories.keys) if (chat != CHAT_GENERAL && chat.lowercase().contains(query)) found.add(chat)
+        for (chat in histories.keys) if (chat.lowercase().contains(query)) found.add(chat)
         Thread {
             val lines = FeedApi.list(host())
             val remote = ArrayList<String>()
@@ -604,7 +600,6 @@ class MainActivity : Activity() {
         }.start()
     }
 
-    // история + живой показ
     private fun storeAndShow(chat: String, token: String) {
         appendHist(chat, token)
         previews[chat] = previewOf(token)
@@ -629,17 +624,12 @@ class MainActivity : Activity() {
 
     private fun sendCurrent(text: String, b64: String?) {
         val chat = currentChat
-        if (chat == CHAT_GENERAL) {
-            if (out == null) { storeAndShow(chat, "sys:нет подключения"); return }
-            if (b64 != null) { dispatch("[${now()}] [${me()}] ", b64); storeAndShow(chat, "meimg:$b64") }
-            else { dispatch("[${now()}] [${me()}] $text", null); storeAndShow(chat, "me:$text") }
-        } else {
-            val s = sessions[chat]
-            if (s == null) { storeAndShow(chat, "sys:нет secret-сессии — нажми 🔐"); return }
-            if (out == null) { storeAndShow(chat, "sys:нет подключения"); return }
-            if (b64 != null) { dispatchTo(chat, "[${now()}] [${me()}] ", b64); storeAndShow(chat, "meimg:$b64") }
-            else { dispatchTo(chat, "[${now()}] [${me()}] $text", null); storeAndShow(chat, "me:$text") }
-        }
+        if (chat.isEmpty()) return
+        val s = sessions[chat]
+        if (s == null) { storeAndShow(chat, "sys:нет secret-сессии — нажми 🔐"); return }
+        if (out == null) { storeAndShow(chat, "sys:нет подключения"); return }
+        if (b64 != null) { dispatchTo(chat, "[${now()}] [${me()}] ", b64); storeAndShow(chat, "meimg:$b64") }
+        else { dispatchTo(chat, "[${now()}] [${me()}] $text", null); storeAndShow(chat, "me:$text") }
     }
     private fun dispatchTo(peer: String, body: String, b64: String?) {
         val payload = if (b64 != null) body + "[IMG:$b64]" else body
@@ -648,10 +638,6 @@ class MainActivity : Activity() {
         s.sendN++; val (next, mk) = Crypto.step(s.sendCk, s.sendN); s.sendCk = next
         sendLine("@$peer DM ${me()} ${s.sendN} ${Crypto.enc(mk, payload)}")
         saveSession(peer, s)
-    }
-    private fun dispatch(body: String, b64: String? = null) {
-        val payload = if (b64 != null) body + "[IMG:$b64]" else body
-        sendLine(Crypto.enc(Crypto.groupKey(), payload))
     }
 
     // ================= ВИДЕО / ПРОФИЛЬ =================
@@ -678,6 +664,10 @@ class MainActivity : Activity() {
         if (requestCode == PICK_IMAGE) {
             val uri = data.data ?: return
             val b64 = compressUri(uri, 320, 60) ?: return
+            if (currentChat.isEmpty() || !sessions.containsKey(currentChat)) {
+                // некуда слать — не в диалоге или нет secret
+                return
+            }
             sendCurrent("", b64)
         } else if (requestCode == PICK_IMAGES) {
             val uris = ArrayList<android.net.Uri>(); val clip = data.clipData
@@ -707,9 +697,8 @@ class MainActivity : Activity() {
             "DM" -> { if (parts.size < 4) return; val from = parts[1]; addKnown(from); val n = parts[2].toLongOrNull() ?: return; val ct = parts[3]
                 val s = sessions[from]; if (s == null) { storeAndShow(from, "sys:🔒 нет сессии"); return }
                 val d = decryptDM(s, n, ct); saveSession(from, s)
-                if (d == null) storeAndShow(from, "sys:🔒 рассинхрон — открой и нажми 🔐 заново") else showContentInto(from, d) }
-            "===" -> storeAndShow(CHAT_GENERAL, "sys:$line")
-            else -> { val d = Crypto.dec(Crypto.groupKey(), line); if (d == null) storeAndShow(CHAT_GENERAL, "sys:🔒 группа (len=${line.length})") else showContentInto(CHAT_GENERAL, d) }
+                if (d == null) storeAndShow(from, "sys:🔒 рассинхрон — открой и нажми 🔐 заново") else showContentInto(from, d!!) }
+            else -> { /* игнор широковещательных сообщений (общий чат убран) */ }
         }
     }
     private fun showContentInto(chat: String, d: String) {
