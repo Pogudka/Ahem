@@ -2,7 +2,7 @@ name: Android Build
 
 on:
   push:
-    branches: ["main", "master"]
+    branches: [ "main", "master" ]
 
 jobs:
   build:
@@ -24,14 +24,22 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon
 
-      - name: Find APK
+      - name: Find APK (Debug)
         run: |
-          echo "=== Ищем APK ==="
+          echo "=== Ищем все APK файлы в проекте ==="
           find . -name "*.apk" -type f
-          echo "=== Конец поиска ==="
+          echo "=== Проверяем папку app ==="
+          ls -la android/app/build/outputs/apk/debug/ || echo "Папка app не найдена"
+          echo "=== Проверяем папку root build ==="
+          ls -la android/build/outputs/apk/debug/ || echo "Папка root build не найдена"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: Ahem-Debug-APK
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          # Ищем файл во всех возможных местах
+          path: |
+            android/app/build/outputs/apk/debug/*.apk
+            android/build/outputs/apk/debug/*.apk
+            **/*-debug.apk
+          if-no-files-found: error
