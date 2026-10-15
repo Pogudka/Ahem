@@ -5,10 +5,12 @@ import android.app.Dialog
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.BitmapShader
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Matrix
+import android.graphics.Shader
 import android.os.Bundle
 import android.provider.MediaStore
 import android.text.util.Linkify
@@ -56,6 +58,7 @@ class MainActivity : Activity() {
     private val pendingImages = ArrayList<String>()
     private var isRegistering = false
     private var isLoggingIn = false
+    private var lastFeedSig = ""
     
     // ЧАТЫ
     private lateinit var chatListRoot: LinearLayout
@@ -94,7 +97,7 @@ class MainActivity : Activity() {
     private var feedListener: ValueEventListener? = null
     private var authListener: FirebaseAuth.AuthStateListener? = null
     
-    // Кэш аватарок чтобы не грузить каждый раз
+    // Кэш аватарок
     private val avatarCache = HashMap<String, Bitmap>()
     
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
@@ -109,15 +112,46 @@ class MainActivity : Activity() {
     private fun me() = currentNick.ifEmpty { "Аноним" }
     private fun addKnown(n: String) { if (n.isNotEmpty() && n != me()) knownNames.add(n) }
 
-    // Круглая аватарка
+    // Круглая аватарка: центр-кроп в квадрат -> масштаб -> круг с отступом 1px
     private fun makeCircularBitmap(source: Bitmap, targetSize: Int): Bitmap {
-        val scaled = Bitmap.createScaledBitmap(source, targetSize, targetSize, true)
-        val bmp = Bitmap.createBitmap(targetSize, targetSize, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(bmp)
+        val s = minOf(source.width, source.height)
+        val sq = Bitmap.createBitmap(source, (source.width - s) / 2, (source.height - s) / 2, s, s)
+        val scaled = Bitmap.createScaledBitmap(sq, targetSize, targetSize, true)
+        val out = Bitmap.createBitmap(targetSize, targetSize, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(out)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-        paint.shader = android.graphics.BitmapShader(scaled, android.graphics.Shader.TileMode.CLAMP, android.graphics.Shader.TileMode.CLAMP)
-        canvas.drawCircle(targetSize / 2f, targetSize / 2f, targetSize / 2f, paint)
-        return bmp
+        paint.shader = BitmapShader(scaled, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
+        canvas.drawCircle(targetSize / 2f, targetSize / 2f, targetSize / 2f - 1f, paint)
+        return out
+    }
+    
+    // Лайк через транзакцию: 1 лайк на пользователя, переключение без багов
+    private fun attachLike(btn: Button, postId: String) {
+        btn.setOnClickListener {
+            if (currentUserId.isEmpty()) return@setOnClickListener
+            val ref = database.child("posts").child(postId)
+            ref.runTransaction(object : Transaction.Handler {
+                override fun doTransaction(mutableData: MutableData): Transaction.Result {
+                    val likes = (mutableData.child("likes").value as? Number)?.toInt() ?: 0
+                    val likedBy = mutableData.child("likedBy")
+                    val has = likedBy.child(currentUserId).exists()
+                    if (has) {
+                        likedBy.child(currentUserId).value = null
+                        mutableData.child("likes").value = maxOf(0, likes - 1)
+                    } else {
+                        likedBy.child(currentUserId).value = true
+                        mutableData.child("likes").value = likes + 1
+                    }
+                    return Transaction.success(mutableData)
+                }
+                override fun onComplete(error: DatabaseError?, committed: Boolean, data: DataSnapshot?) {
+                    if (committed && data != null) {
+                        val newCount = (data.child("likes").value as? Number)?.toInt() ?: 0
+                        btn.text = "♥ $newCount"
+                    }
+                }
+            })
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -290,6 +324,7 @@ class MainActivity : Activity() {
         
         val pendScroll = HorizontalScrollView(this)
         pendScroll.layoutParams = lp(-1, -2, 0)
+        pendScroll.isHorizontalScrollBarEnabled = false
         
         pendingRow = LinearLayout(this)
         pendingRow.orientation = LinearLayout.HORIZONTAL
@@ -310,7 +345,7 @@ class MainActivity : Activity() {
         wt(pubBtn, 2f)
         
         val phBtn = Button(this)
-        phBtn.text = " несколько"
+        phBtn.text = "📷 несколько"
         phBtn.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
         wt(phBtn, 1f)
         
@@ -321,7 +356,7 @@ class MainActivity : Activity() {
         rowAct.orientation = LinearLayout.HORIZONTAL
         
         val feedBtn = Button(this)
-        feedBtn.text = " Лента"
+        feedBtn.text = "⟳ Лента"
         feedBtn.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
         wt(feedBtn, 1f)
         
@@ -346,6 +381,7 @@ class MainActivity : Activity() {
         feedScroll.addView(feedBox)
         feedScroll.layoutParams = lp(-1, 0, 0)
         wt(feedScroll, 1f)
+        feedScroll.isVerticalScrollBarEnabled = false
         
         feedBlock.addView(headerRow)
         feedBlock.addView(pendingWrap)
@@ -482,12 +518,26 @@ class MainActivity : Activity() {
     private fun loadFeed() {
         feedListener?.let { database.child("posts").removeEventListener(it) }
         feedBox.removeAllViews()
+        lastFeedSig = ""
         
         feedListener = database.child("posts").orderByChild("timestamp").addValueEventListener(object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
-                feedBox.removeAllViews()
                 val posts = ArrayList<DataSnapshot>()
                 for (child in snapshot.children) posts.add(child)
+                
+                // Сигнатура ленты БЕЗ лайков: если изменились только лайки - не перерисовываем
+                val sb = StringBuilder()
+                for (p in posts) {
+                    sb.append(p.key).append('~')
+                      .append(p.child("timestamp").getValue(Long::class.java) ?: 0).append('~')
+                      .append(p.child("text").getValue(String::class.java) ?: "").append('~')
+                      .append(p.child("images").getValue(String::class.java) ?: "").append(';')
+                }
+                val sig = sb.toString()
+                if (sig == lastFeedSig) return
+                lastFeedSig = sig
+                
+                feedBox.removeAllViews()
                 for (post in posts.reversed()) {
                     val postId = post.key ?: ""
                     val authorId = post.child("authorId").getValue(String::class.java) ?: ""
@@ -495,7 +545,7 @@ class MainActivity : Activity() {
                     val text = post.child("text").getValue(String::class.java) ?: ""
                     val imagesStr = post.child("images").getValue(String::class.java) ?: ""
                     val ts = post.child("timestamp").getValue(Long::class.java) ?: 0
-                    val likeCount = post.child("likes").getValue(Int::class.java) ?: 0
+                    val likeCount = (post.child("likes").value as? Number)?.toInt() ?: 0
                     val timeStr = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(ts))
                     
                     val card = LinearLayout(this@MainActivity)
@@ -504,20 +554,20 @@ class MainActivity : Activity() {
                     card.layoutParams = lp(-1, LinearLayout.LayoutParams.WRAP_CONTENT, 8)
                     card.setBackgroundColor(0xFFFFFFFF.toInt())
                     card.elevation = 2f
-                    card.tag = postId // Сохраняем ID поста в теге
                     
                     // ШАПКА ПОСТА
                     val header = LinearLayout(this@MainActivity)
                     header.orientation = LinearLayout.HORIZONTAL
-                    header.setPadding(12, 12, 12, 12)
+                    header.setPadding(12, 14, 12, 12)
                     header.gravity = Gravity.CENTER_VERTICAL
                     
                     val avatarView = ImageView(this@MainActivity)
                     val avatarSize = dp(40)
-                    avatarView.layoutParams = lp(avatarSize, avatarSize, 12)
+                    val avParams = LinearLayout.LayoutParams(avatarSize, avatarSize)
+                    avParams.marginEnd = 12
+                    avatarView.layoutParams = avParams
                     avatarView.scaleType = ImageView.ScaleType.FIT_CENTER
                     
-                    // Загружаем аватарку из кэша или из Firebase
                     if (avatarCache.containsKey(authorId)) {
                         avatarView.setImageBitmap(avatarCache[authorId])
                     } else {
@@ -680,29 +730,7 @@ class MainActivity : Activity() {
                     likeBtn.text = "♥ $likeCount"
                     likeBtn.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
                     wt(likeBtn, 1f)
-                    likeBtn.tag = postId // Сохраняем ID поста в теге кнопки
-                    
-                    val likedBy = post.child("likedBy").children.map { it.key }.toSet()
-                    val alreadyLiked = currentUserId in likedBy
-                    
-                    likeBtn.setOnClickListener {
-                        val btn = it as Button
-                        val pid = btn.tag as String
-                        val currentText = btn.text.toString()
-                        val currentLikeCount = currentText.substringAfter("♥ ").trim().toIntOrNull() ?: 0
-                        
-                        if (alreadyLiked) {
-                            val newCount = if (currentLikeCount > 0) currentLikeCount - 1 else 0
-                            database.child("posts").child(pid).child("likes").setValue(newCount)
-                            database.child("posts").child(pid).child("likedBy").child(currentUserId).removeValue()
-                            btn.text = "♥ $newCount"
-                        } else {
-                            val newCount = currentLikeCount + 1
-                            database.child("posts").child(pid).child("likes").setValue(newCount)
-                            database.child("posts").child(pid).child("likedBy").child(currentUserId).setValue(true)
-                            btn.text = "♥ $newCount"
-                        }
-                    }
+                    attachLike(likeBtn, postId)
                     row.addView(likeBtn)
                     
                     if (authorId != currentUserId) {
@@ -756,7 +784,7 @@ class MainActivity : Activity() {
         bar.setBackgroundColor(0x66000000)
         
         val prevB = Button(this)
-        prevB.text = ""
+        prevB.text = "◀"
         prevB.setTextColor(0xFFFFFFFF.toInt())
         prevB.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
         wt(prevB, 1f)
@@ -908,6 +936,7 @@ class MainActivity : Activity() {
         listScroll.addView(chatListRows)
         listScroll.layoutParams = lp(-1, 0, 0)
         wt(listScroll, 1f)
+        listScroll.isVerticalScrollBarEnabled = false
         
         chatListRoot.addView(chatStatus)
         chatListRoot.addView(rowSearch)
@@ -940,6 +969,7 @@ class MainActivity : Activity() {
         convScroll.addView(convBox)
         convScroll.layoutParams = lp(-1, 0, 0)
         wt(convScroll, 1f)
+        convScroll.isVerticalScrollBarEnabled = false
         
         msgField = EditText(this)
         msgField.hint = "Сообщение..."
@@ -1051,6 +1081,7 @@ class MainActivity : Activity() {
         
         profileScroll = ScrollView(this)
         profileScroll.layoutParams = lp(-1, -1)
+        profileScroll.isVerticalScrollBarEnabled = false
         
         val content = LinearLayout(this)
         content.orientation = LinearLayout.VERTICAL
@@ -1283,7 +1314,7 @@ class MainActivity : Activity() {
                             
                             for (post in postSnapshot.children) {
                                 userPosts.add(post); postCount++
-                                totalLikes += post.child("likes").getValue(Int::class.java) ?: 0
+                                totalLikes += (post.child("likes").value as? Number)?.toInt() ?: 0
                             }
                             
                             profilePostsCount.text = postCount.toString()
@@ -1304,7 +1335,7 @@ class MainActivity : Activity() {
                                 val postId = post.key ?: ""
                                 val imagesStr = post.child("images").getValue(String::class.java) ?: ""
                                 val text = post.child("text").getValue(String::class.java) ?: ""
-                                val likeCount = post.child("likes").getValue(Int::class.java) ?: 0
+                                val likeCount = (post.child("likes").value as? Number)?.toInt() ?: 0
                                 
                                 val card = LinearLayout(this@MainActivity)
                                 card.orientation = LinearLayout.VERTICAL
@@ -1344,33 +1375,11 @@ class MainActivity : Activity() {
                                     }
                                 }
                                 
-                                // Кнопка лайка в профиле
+                                // Кнопка лайка в профиле (та же транзакция)
                                 val likeBtn = Button(this@MainActivity)
                                 likeBtn.text = "♥ $likeCount"
                                 likeBtn.layoutParams = lp(-1, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
-                                likeBtn.tag = postId
-                                
-                                val likedBy = post.child("likedBy").children.map { it.key }.toSet()
-                                val alreadyLiked = currentUserId in likedBy
-                                
-                                likeBtn.setOnClickListener {
-                                    val btn = it as Button
-                                    val pid = btn.tag as String
-                                    val currentText = btn.text.toString()
-                                    val currentLikeCount = currentText.substringAfter("♥ ").trim().toIntOrNull() ?: 0
-                                    
-                                    if (alreadyLiked) {
-                                        val newCount = if (currentLikeCount > 0) currentLikeCount - 1 else 0
-                                        database.child("posts").child(pid).child("likes").setValue(newCount)
-                                        database.child("posts").child(pid).child("likedBy").child(currentUserId).removeValue()
-                                        btn.text = "♥ $newCount"
-                                    } else {
-                                        val newCount = currentLikeCount + 1
-                                        database.child("posts").child(pid).child("likes").setValue(newCount)
-                                        database.child("posts").child(pid).child("likedBy").child(currentUserId).setValue(true)
-                                        btn.text = "♥ $newCount"
-                                    }
-                                }
+                                attachLike(likeBtn, postId)
                                 card.addView(likeBtn)
                                 
                                 profilePostsGrid.addView(card)
@@ -1465,6 +1474,8 @@ class MainActivity : Activity() {
                 database.child("users").child(currentUserId).child("avatar").setValue(avatarB64)
                 currentAvatar = avatarB64
                 
+                // Обновляем кэш и все видимые аватарки
+                avatarCache[currentUserId] = makeCircularBitmap(scaled, dp(40))
                 profileAvatar.setImageBitmap(makeCircularBitmap(scaled, dp(100)))
                 editAvatarView?.setImageBitmap(makeCircularBitmap(scaled, dp(120)))
             } catch (e: Exception) {}
