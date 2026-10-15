@@ -1,3 +1,28 @@
+tasks.register('downloadFonts') {
+    doLast {
+        def fontDir = file('src/main/res/font')
+        fontDir.mkdirs()
+        def fonts = [
+            'unbounded.ttf'     : ['https://github.com/googlefonts/unbounded/raw/main/fonts/ttf/Unbounded-Bold.ttf',
+                                   'https://github.com/google/fonts/raw/main/ofl/unbounded/Unbounded%5Bwght%5D.ttf'],
+            'ubuntu_medium.ttf' : ['https://github.com/googlefonts/ubuntu/raw/main/fonts/ttf/Ubuntu-Medium.ttf'],
+            'ubuntu_regular.ttf': ['https://github.com/googlefonts/ubuntu/raw/main/fonts/ttf/Ubuntu-Regular.ttf']
+        ]
+        fonts.each { name, urls ->
+            def f = new File(fontDir, name)
+            if (!f.exists() || f.length() == 0) {
+                for (u in urls) {
+                    try {
+                        new URL(u).withInputStream { i -> f.withOutputStream { o -> o << i } }
+                        if (f.length() > 0) break
+                    } catch (e) { }
+                }
+            }
+        }
+    }
+}
+afterEvaluate { preBuild.dependsOn downloadFonts }
+
 plugins {
     id 'com.android.application'
     id 'org.jetbrains.kotlin.android'
@@ -22,24 +47,21 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
-    
+
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
-    
+
     kotlinOptions {
         jvmTarget = '17'
     }
 }
 
 dependencies {
-    implementation 'androidx.core:core-ktx:1.12.0'
-    implementation 'androidx.appcompat:appcompat:1.6.1'
-    implementation 'com.google.android.material:material:1.11.0'
-    
-    // Firebase
-    implementation platform('com.google.firebase:firebase-bom:32.7.2')
+    implementation platform('com.google.firebase:firebase-bom:33.5.1')
     implementation 'com.google.firebase:firebase-auth-ktx'
     implementation 'com.google.firebase:firebase-database-ktx'
+    implementation 'androidx.core:core-ktx:1.13.1'
+    implementation 'androidx.appcompat:appcompat:1.7.0'
 }
