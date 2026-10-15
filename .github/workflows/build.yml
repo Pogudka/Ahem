@@ -1,9 +1,7 @@
-name: Android CI
+name: Android Build
 
 on:
   push:
-    branches: [ "main", "master" ]
-  pull_request:
     branches: [ "main", "master" ]
 
 jobs:
@@ -19,13 +17,14 @@ jobs:
       with:
         java-version: '17'
         distribution: 'temurin'
-        cache: gradle
 
-    - name: Grant execute permission for gradlew
-      run: chmod +x android/gradlew
-
-    - name: Build with Gradle
-      run: cd android && ./gradlew assembleDebug --no-daemon
+    - name: Generate Wrapper and Build APK
+      # Эта магия сама создаст gradlew на сервере GitHub, если его нет, и соберет приложение
+      run: |
+        cd android
+        gradle wrapper --gradle-version 8.7
+        chmod +x gradlew
+        ./gradlew assembleDebug --no-daemon
 
     - name: Upload APK Artifact
       uses: actions/upload-artifact@v4
