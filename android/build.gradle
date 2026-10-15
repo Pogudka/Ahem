@@ -11,12 +11,7 @@ buildscript {
     }
 }
 
-allprojects {
-    repositories {
-        google()
-        mavenCentral()
-    }
-}
+// Блок allprojects удалён, чтобы избежать конфликта с settings.gradle
 
 rootProject.buildDir = '../build'
 subprojects {
