@@ -9,7 +9,6 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Matrix
-import android.graphics.drawable.BitmapDrawable
 import android.os.Bundle
 import android.provider.MediaStore
 import android.util.Base64
@@ -84,6 +83,7 @@ class MainActivity : Activity() {
     private lateinit var profileScroll: ScrollView
     private var viewingUserId = ""
     private var viewingNick = ""
+    private var editAvatarView: ImageView? = null
     
     private val PICK_IMAGE = 1001
     private val PICK_IMAGES = 1002
@@ -104,6 +104,21 @@ class MainActivity : Activity() {
     }
     private fun me() = currentNick.ifEmpty { "Аноним" }
     private fun addKnown(n: String) { if (n.isNotEmpty() && n != me()) knownNames.add(n) }
+
+    // Делаем bitmap круглым
+    private fun makeCircularBitmap(source: Bitmap): Bitmap {
+        val size = minOf(source.width, source.height)
+        val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bmp)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+        paint.shader = android.graphics.BitmapShader(source, android.graphics.Shader.TileMode.CLAMP, android.graphics.Shader.TileMode.CLAMP)
+        val matrix = android.graphics.Matrix()
+        val scale = size.toFloat() / minOf(source.width, source.height)
+        matrix.setScale(scale, scale)
+        paint.shader.setLocalMatrix(matrix)
+        canvas.drawCircle(size / 2f, size / 2f, size / 2f, paint)
+        return bmp
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -432,7 +447,6 @@ class MainActivity : Activity() {
             val post = HashMap<String, Any>()
             post["authorId"] = currentUserId
             post["authorNick"] = currentNick
-            post["authorAvatar"] = currentAvatar
             post["text"] = text
             post["images"] = pendingImages.joinToString(",")
             post["timestamp"] = System.currentTimeMillis()
@@ -478,7 +492,6 @@ class MainActivity : Activity() {
                     val postId = post.key ?: ""
                     val authorId = post.child("authorId").getValue(String::class.java) ?: ""
                     val authorNick = post.child("authorNick").getValue(String::class.java) ?: "?"
-                    val authorAvatar = post.child("authorAvatar").getValue(String::class.java) ?: ""
                     val text = post.child("text").getValue(String::class.java) ?: ""
                     val imagesStr = post.child("images").getValue(String::class.java) ?: ""
                     val ts = post.child("timestamp").getValue(Long::class.java) ?: 0
@@ -501,21 +514,28 @@ class MainActivity : Activity() {
                     val avatarView = ImageView(this@MainActivity)
                     avatarView.layoutParams = lp(dp(40), dp(40), 12)
                     avatarView.scaleType = ImageView.ScaleType.CENTER_CROP
-                    // Делаем аватарку круглой
-                    avatarView.clipToOutline = true
-                    avatarView.setBackgroundResource(android.R.drawable.picture_frame)
                     
-                    if (authorAvatar.isNotEmpty()) {
-                        try {
-                            val bytes = Base64.decode(authorAvatar, Base64.NO_WRAP)
-                            val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                            avatarView.setImageBitmap(bmp)
-                        } catch (e: Exception) {
-                            avatarView.setImageBitmap(createAvatarBitmap(authorNick))
-                        }
-                    } else {
-                        avatarView.setImageBitmap(createAvatarBitmap(authorNick))
-                    }
+                    // Загружаем актуальную аватарку из базы пользователей
+                    database.child("users").child(authorId).child("avatar")
+                        .addListenerForSingleValueEvent(object : ValueEventListener {
+                            override fun onDataChange(avatarSnapshot: DataSnapshot) {
+                                val authorAvatar = avatarSnapshot.getValue(String::class.java) ?: ""
+                                if (authorAvatar.isNotEmpty()) {
+                                    try {
+                                        val bytes = Base64.decode(authorAvatar, Base64.NO_WRAP)
+                                        val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                                        avatarView.setImageBitmap(makeCircularBitmap(bmp))
+                                    } catch (e: Exception) {
+                                        avatarView.setImageBitmap(makeCircularBitmap(createAvatarBitmap(authorNick)))
+                                    }
+                                } else {
+                                    avatarView.setImageBitmap(makeCircularBitmap(createAvatarBitmap(authorNick)))
+                                }
+                            }
+                            override fun onCancelled(error: DatabaseError) {
+                                avatarView.setImageBitmap(makeCircularBitmap(createAvatarBitmap(authorNick)))
+                            }
+                        })
                     
                     avatarView.setOnClickListener { openUserProfile(authorId, authorNick) }
                     
@@ -1026,8 +1046,6 @@ class MainActivity : Activity() {
         profileAvatar = ImageView(this)
         profileAvatar.layoutParams = lp(dp(100), dp(100), 16)
         profileAvatar.scaleType = ImageView.ScaleType.CENTER_CROP
-        profileAvatar.clipToOutline = true
-        profileAvatar.setBackgroundResource(android.R.drawable.picture_frame)
         
         profileNick = TextView(this)
         profileNick.textSize = 20f
@@ -1109,14 +1127,12 @@ class MainActivity : Activity() {
     private fun showEditProfileDialog() {
         if (viewingUserId != currentUserId) return
         
-        // Создаем полноэкранное окно для редактирования
         val dlg = Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen)
         val layout = LinearLayout(this)
         layout.orientation = LinearLayout.VERTICAL
         layout.setBackgroundColor(0xFFFFFFFF.toInt())
         layout.setPadding(32, 16, 32, 16)
         
-        // Заголовок
         val headerLayout = LinearLayout(this)
         headerLayout.orientation = LinearLayout.HORIZONTAL
         headerLayout.gravity = Gravity.CENTER_VERTICAL
@@ -1136,43 +1152,39 @@ class MainActivity : Activity() {
         headerLayout.addView(backBtn)
         headerLayout.addView(title)
         
-        // Аватар
         val avatarLayout = LinearLayout(this)
         avatarLayout.orientation = LinearLayout.VERTICAL
         avatarLayout.gravity = Gravity.CENTER_HORIZONTAL
         avatarLayout.layoutParams = lp(-1, -2, 32)
         
-        val avatarEdit = ImageView(this)
-        avatarEdit.layoutParams = lp(dp(120), dp(120), 16)
-        avatarEdit.scaleType = ImageView.ScaleType.CENTER_CROP
-        avatarEdit.clipToOutline = true
-        avatarEdit.setBackgroundResource(android.R.drawable.picture_frame)
+        editAvatarView = ImageView(this)
+        editAvatarView!!.layoutParams = lp(dp(120), dp(120), 16)
+        editAvatarView!!.scaleType = ImageView.ScaleType.CENTER_CROP
         
         if (currentAvatar.isNotEmpty()) {
             try {
                 val bytes = Base64.decode(currentAvatar, Base64.NO_WRAP)
-                avatarEdit.setImageBitmap(BitmapFactory.decodeByteArray(bytes, 0, bytes.size))
+                val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                editAvatarView!!.setImageBitmap(makeCircularBitmap(bmp))
             } catch (e: Exception) {
-                avatarEdit.setImageBitmap(createAvatarBitmap(currentNick))
+                editAvatarView!!.setImageBitmap(makeCircularBitmap(createAvatarBitmap(currentNick)))
             }
         } else {
-            avatarEdit.setImageBitmap(createAvatarBitmap(currentNick))
+            editAvatarView!!.setImageBitmap(makeCircularBitmap(createAvatarBitmap(currentNick)))
         }
         
         val changeAvatarBtn = Button(this)
         changeAvatarBtn.text = "📷 Сменить аватар"
         changeAvatarBtn.layoutParams = lp(-1, -2, 0)
         
-        avatarLayout.addView(avatarEdit)
+        avatarLayout.addView(editAvatarView)
         avatarLayout.addView(changeAvatarBtn)
         
-        // Ник
         val nickEdit = EditText(this)
         nickEdit.hint = "Ник"
         nickEdit.setText(currentNick)
         nickEdit.layoutParams = lp(-1, -2, 16)
         
-        // Био
         val bioEdit = EditText(this)
         bioEdit.hint = "Био"
         bioEdit.setText(profileBio.text.toString())
@@ -1180,7 +1192,6 @@ class MainActivity : Activity() {
         bioEdit.gravity = Gravity.TOP
         bioEdit.minLines = 3
         
-        // Кнопка сохранить
         val saveBtn = Button(this)
         saveBtn.text = "Сохранить"
         saveBtn.layoutParams = lp(-1, -2, 0)
@@ -1200,6 +1211,7 @@ class MainActivity : Activity() {
             database.child("users").child(currentUserId).child("bio").setValue(newBio)
             dlg.dismiss()
             refreshProfile()
+            loadFeed() // Обновляем ленту с новой аватаркой
         }
         
         layout.addView(headerLayout)
@@ -1228,12 +1240,12 @@ class MainActivity : Activity() {
                     try {
                         val bytes = Base64.decode(avatar, Base64.NO_WRAP)
                         val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                        profileAvatar.setImageBitmap(bmp)
+                        profileAvatar.setImageBitmap(makeCircularBitmap(bmp))
                     } catch (e: Exception) {
-                        profileAvatar.setImageBitmap(createAvatarBitmap(nick))
+                        profileAvatar.setImageBitmap(makeCircularBitmap(createAvatarBitmap(nick)))
                     }
                 } else {
-                    profileAvatar.setImageBitmap(createAvatarBitmap(nick))
+                    profileAvatar.setImageBitmap(makeCircularBitmap(createAvatarBitmap(nick)))
                 }
                 
                 profileNick.text = "@$nick"
@@ -1280,7 +1292,6 @@ class MainActivity : Activity() {
                                 val text = post.child("text").getValue(String::class.java) ?: ""
                                 val likeCount = post.child("likes").getValue(Int::class.java) ?: 0
                                 
-                                // Создаем карточку поста
                                 val card = LinearLayout(this@MainActivity)
                                 card.orientation = LinearLayout.VERTICAL
                                 card.setPadding(0, 0, 0, 8)
@@ -1288,7 +1299,6 @@ class MainActivity : Activity() {
                                 card.setBackgroundColor(0xFFFFFFFF.toInt())
                                 card.elevation = 2f
                                 
-                                // Показываем текст если есть
                                 if (text.isNotEmpty()) {
                                     val tv = TextView(this@MainActivity)
                                     tv.text = text
@@ -1298,7 +1308,6 @@ class MainActivity : Activity() {
                                     card.addView(tv)
                                 }
                                 
-                                // Показываем фото если есть
                                 if (imagesStr.isNotEmpty()) {
                                     val images = imagesStr.split(",").filter { it.isNotEmpty() }
                                     if (images.isNotEmpty()) {
@@ -1328,8 +1337,7 @@ class MainActivity : Activity() {
                                             card.addView(box)
                                         } catch (e: Exception) {}
                                     }
-                                } else {
-                                    // Если нет фото, показываем лайки под текстом
+                                } else if (text.isNotEmpty()) {
                                     val likeTv = TextView(this@MainActivity)
                                     likeTv.text = "♥ $likeCount"
                                     likeTv.textSize = 12f
@@ -1430,7 +1438,12 @@ class MainActivity : Activity() {
                 val avatarB64 = Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)
                 database.child("users").child(currentUserId).child("avatar").setValue(avatarB64)
                 currentAvatar = avatarB64
-                profileAvatar.setImageBitmap(scaled)
+                
+                // Обновляем аватарку в профиле
+                profileAvatar.setImageBitmap(makeCircularBitmap(scaled))
+                
+                // Обновляем аватарку в окне редактирования если оно открыто
+                editAvatarView?.setImageBitmap(makeCircularBitmap(scaled))
             } catch (e: Exception) {}
         }
     }
