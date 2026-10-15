@@ -9,9 +9,11 @@ import android.graphics.BitmapFactory
 import android.graphics.BitmapShader
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Shader
 import android.graphics.Typeface
+import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.provider.MediaStore
@@ -23,17 +25,32 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import android.view.View
-import android.widget.*
+import android.widget.Button
+import android.widget.EditText
+import android.widget.FrameLayout
+import android.widget.HorizontalScrollView
+import android.widget.ImageView
+import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.TextView
+import android.widget.Toast
 import androidx.core.content.res.ResourcesCompat
 import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.database.*
+import com.google.firebase.database.DataSnapshot
+import com.google.firebase.database.DatabaseError
+import com.google.firebase.database.DatabaseReference
+import com.google.firebase.database.FirebaseDatabase
+import com.google.firebase.database.MutableData
+import com.google.firebase.database.Transaction
+import com.google.firebase.database.ValueEventListener
 import java.io.ByteArrayOutputStream
 import java.text.SimpleDateFormat
-import java.util.*
+import java.util.Date
+import java.util.Locale
 
 class MainActivity : Activity() {
 
-    // ================= ПАЛИТРА (бело-чёрная, переключается) =================
+    // ================= ПАЛИТРА (только белый / чёрный / серый) =================
     private object P {
         var bg = 0xFFFFFFFF.toInt()
         var surface = 0xFFF7F7F9.toInt()
@@ -45,7 +62,7 @@ class MainActivity : Activity() {
         var accentText = 0xFFFFFFFF.toInt()
         var navInactive = 0xFF9A9AA0.toInt()
         var heartOn = 0xFF000000.toInt()
-        var scrim = 0x66000000
+        var scrim = 0x66000000.toInt()
     }
 
     private fun applyTheme(dark: Boolean) {
@@ -60,7 +77,7 @@ class MainActivity : Activity() {
             P.accentText = 0xFF000000.toInt()
             P.navInactive = 0xFF7C7C82.toInt()
             P.heartOn = 0xFFFFFFFF.toInt()
-            P.scrim = 0x99000000
+            P.scrim = 0x99000000.toInt()
         } else {
             P.bg = 0xFFFFFFFF.toInt()
             P.surface = 0xFFF7F7F9.toInt()
@@ -72,7 +89,7 @@ class MainActivity : Activity() {
             P.accentText = 0xFFFFFFFF.toInt()
             P.navInactive = 0xFF9A9AA0.toInt()
             P.heartOn = 0xFF000000.toInt()
-            P.scrim = 0x66000000
+            P.scrim = 0x66000000.toInt()
         }
     }
 
@@ -85,8 +102,8 @@ class MainActivity : Activity() {
     private val fMed: Typeface by lazy { ResourcesCompat.getFont(this, R.font.ubuntu_medium)!! }
     private val fReg: Typeface by lazy { ResourcesCompat.getFont(this, R.font.ubuntu_regular)!! }
 
-    // ================= ХЕЛПЕРЫ РАЗМЕТКИ =================
-    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+    // ================= РАЗМЕТКА =================
+    private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
 
     private fun lp(w: Int, h: Int, margin: Int = 0): LinearLayout.LayoutParams {
         val p = LinearLayout.LayoutParams(w, h)
@@ -94,7 +111,6 @@ class MainActivity : Activity() {
         return p
     }
 
-    // Безопасный weight: не падаем, если родитель не LinearLayout
     private fun wt(v: View, w: Float) {
         val cur = v.layoutParams
         if (cur is LinearLayout.LayoutParams) {
@@ -103,7 +119,7 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun me() = currentNick.ifEmpty { "Аноним" }
+    private fun me(): String = currentNick.ifEmpty { "Аноним" }
 
     private fun addKnown(n: String) {
         if (n.isNotEmpty() && n != me()) knownNames.add(n)
@@ -112,7 +128,7 @@ class MainActivity : Activity() {
     private fun parseCount(t: TextView): Int =
         t.text.toString().substringAfter("♥").trim().toIntOrNull() ?: 0
 
-    // ================= ГРАФИКА (минимализм: скруглённый фон + бордер) =================
+    // ================= ГРАФИКА =================
     private fun surf(radius: Int, filled: Boolean = true): GradientDrawable {
         val g = GradientDrawable()
         g.setColor(if (filled) P.surface else Color.TRANSPARENT)
@@ -188,7 +204,7 @@ class MainActivity : Activity() {
         return iv
     }
 
-    // ================= DECODE С УМЕНЬШЕНИЕМ (фикс OOM) =================
+    // ================= DECODE С УМЕНЬШЕНИЕМ (анти-OOM) =================
     private fun decodeScaled(b64: String, reqPx: Int): Bitmap? {
         return try {
             val bytes = Base64.decode(b64, Base64.NO_WRAP)
@@ -210,8 +226,8 @@ class MainActivity : Activity() {
 
     // ================= АВАТАРКИ =================
     private fun makeCircularBitmap(source: Bitmap, targetSize: Int): Bitmap {
-        val s = minOf(source.width, source.height)
-        val sq = Bitmap.createBitmap(source, (source.width - s) / 2, (source.height - s) / 2, s, s)
+        val side = minOf(source.width, source.height)
+        val sq = Bitmap.createBitmap(source, (source.width - side) / 2, (source.height - side) / 2, side, side)
         val scaled = Bitmap.createScaledBitmap(sq, targetSize, targetSize, true)
         val out = Bitmap.createBitmap(targetSize, targetSize, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(out)
@@ -406,7 +422,6 @@ class MainActivity : Activity() {
     // ================= СОЗДАНИЕ =================
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
         applyTheme(isDark())
 
         auth = FirebaseAuth.getInstance()
@@ -557,7 +572,6 @@ class MainActivity : Activity() {
         top.orientation = LinearLayout.HORIZONTAL
         top.gravity = Gravity.CENTER_VERTICAL
         top.setPadding(dp(18), dp(14), dp(18), dp(10))
-
         val logoS = tv("Ahem", 20f, fBold, P.text)
         logoS.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
         wt(logoS, 1f)
@@ -655,34 +669,57 @@ class MainActivity : Activity() {
             val email = feedEmail.text.toString().trim()
             val nick = feedNick.text.toString().trim()
             val pass = feedPass.text.toString()
-            if (email.isEmpty() || nick.isEmpty() || pass.isEmpty()) { feedStatus.text = "Заполни все поля"; return@setOnClickListener }
-            if (nick.length < 5) { feedStatus.text = "Ник минимум 5 символов"; return@setOnClickListener }
+            if (email.isEmpty() || nick.isEmpty() || pass.isEmpty()) {
+                feedStatus.text = "Заполни все поля"
+                return@setOnClickListener
+            }
+            if (nick.length < 5) {
+                feedStatus.text = "Ник минимум 5 символов"
+                return@setOnClickListener
+            }
             isRegistering = true
             regBtn.text = "..."
             isNickTaken(nick, "") { taken ->
-                if (taken) { feedStatus.text = "Ник уже занят"; isRegistering = false; regBtn.text = "Регистрация"; return@isNickTaken }
+                if (taken) {
+                    feedStatus.text = "Ник уже занят"
+                    isRegistering = false
+                    regBtn.text = "Регистрация"
+                    return@isNickTaken
+                }
                 auth.createUserWithEmailAndPassword(email, pass).addOnCompleteListener { task ->
                     if (task.isSuccessful) {
                         val userId = auth.currentUser?.uid ?: return@addOnCompleteListener
                         database.child("users").child(userId).child("email").setValue(email)
                         database.child("users").child(userId).child("nick").setValue(nick)
-                        currentUserId = userId; currentNick = nick; viewingUserId = currentUserId
+                        currentUserId = userId
+                        currentNick = nick
+                        viewingUserId = currentUserId
                         feedStatus.text = "Зарегистрирован!"
                         enterFeedMode()
-                    } else feedStatus.text = "Ошибка: ${task.exception?.message}"
-                    isRegistering = false; regBtn.text = "Регистрация"
+                    } else {
+                        feedStatus.text = "Ошибка: ${task.exception?.message}"
+                    }
+                    isRegistering = false
+                    regBtn.text = "Регистрация"
                 }
             }
         }
+
         logBtn.setOnClickListener {
             if (isLoggingIn) return@setOnClickListener
-            val email = feedEmail.text.toString(); val pass = feedPass.text.toString()
-            if (email.isEmpty() || pass.isEmpty()) { feedStatus.text = "Email + пароль"; return@setOnClickListener }
-            isLoggingIn = true; logBtn.text = "..."
+            val email = feedEmail.text.toString()
+            val pass = feedPass.text.toString()
+            if (email.isEmpty() || pass.isEmpty()) {
+                feedStatus.text = "Email + пароль"
+                return@setOnClickListener
+            }
+            isLoggingIn = true
+            logBtn.text = "..."
             auth.signInWithEmailAndPassword(email, pass).addOnCompleteListener { task ->
                 if (task.isSuccessful) {
                     val userId = auth.currentUser?.uid ?: return@addOnCompleteListener
-                    currentUserId = userId; viewingUserId = currentUserId
+                    currentUserId = userId
+                    viewingUserId = currentUserId
                     database.child("users").child(userId).addListenerForSingleValueEvent(object : ValueEventListener {
                         override fun onDataChange(snapshot: DataSnapshot) {
                             currentNick = snapshot.child("nick").getValue(String::class.java) ?: "Аноним"
@@ -691,38 +728,63 @@ class MainActivity : Activity() {
                         }
                         override fun onCancelled(error: DatabaseError) {}
                     })
-                } else feedStatus.text = "Ошибка: ${task.exception?.message}"
-                isLoggingIn = false; logBtn.text = "Вход"
+                } else {
+                    feedStatus.text = "Ошибка: ${task.exception?.message}"
+                }
+                isLoggingIn = false
+                logBtn.text = "Вход"
             }
         }
+
         switchIv.setOnClickListener {
             auth.signOut()
-            feedBlock.visibility = View.GONE; authBlock.visibility = View.VISIBLE
+            feedBlock.visibility = View.GONE
+            authBlock.visibility = View.VISIBLE
             feedStatus.text = "не залогинен"
-            currentUserId = ""; currentNick = ""; currentAvatar = ""
+            currentUserId = ""
+            currentNick = ""
+            currentAvatar = ""
         }
-        clearIv.setOnClickListener { pendingImages.clear(); pendingWrap.visibility = View.GONE }
+
+        clearIv.setOnClickListener {
+            pendingImages.clear()
+            pendingWrap.visibility = View.GONE
+        }
+
         camIv.setOnClickListener {
             val intent = Intent(Intent.ACTION_GET_CONTENT)
             intent.type = "image/*"
             intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
             startActivityForResult(Intent.createChooser(intent, "Выбери фото"), PICK_IMAGES)
         }
+
         pubBtn.setOnClickListener {
             val text = feedPostText.text.toString()
             if (text.isEmpty() && pendingImages.isEmpty()) return@setOnClickListener
             val postId = database.child("posts").push().key ?: return@setOnClickListener
             val post = HashMap<String, Any>()
-            post["authorId"] = currentUserId; post["authorNick"] = currentNick; post["text"] = text
-            post["images"] = pendingImages.joinToString(","); post["timestamp"] = System.currentTimeMillis()
-            post["likes"] = 0; post["likedBy"] = HashMap<String, Boolean>()
+            post["authorId"] = currentUserId
+            post["authorNick"] = currentNick
+            post["text"] = text
+            post["images"] = pendingImages.joinToString(",")
+            post["timestamp"] = System.currentTimeMillis()
+            post["likes"] = 0
+            post["likedBy"] = HashMap<String, Boolean>()
             database.child("posts").child(postId).setValue(post)
-            feedPostText.setText(""); pendingImages.clear(); pendingWrap.visibility = View.GONE
+            feedPostText.setText("")
+            pendingImages.clear()
+            pendingWrap.visibility = View.GONE
         }
+
         feedBtn.setOnClickListener { loadFeed() }
+
         folBtn.setOnClickListener {
             val n = feedFollowNick.text.toString().trim()
-            if (n.isNotEmpty()) { addKnown(n); feedFollowNick.setText(""); Toast.makeText(this, "Подписаны на $n", Toast.LENGTH_SHORT).show() }
+            if (n.isNotEmpty()) {
+                addKnown(n)
+                feedFollowNick.setText("")
+                Toast.makeText(this, "Подписаны на $n", Toast.LENGTH_SHORT).show()
+            }
         }
 
         col.addView(authBlock)
@@ -750,10 +812,10 @@ class MainActivity : Activity() {
                 val sb = StringBuilder()
                 for (p in posts) {
                     sb.append(p.key).append('~')
-                      .append(p.child("timestamp").getValue(Long::class.java) ?: 0).append('~')
-                      .append(p.child("authorNick").getValue(String::class.java) ?: "").append('~')
-                      .append(p.child("text").getValue(String::class.java) ?: "").append('~')
-                      .append(p.child("images").getValue(String::class.java) ?: "").append(';')
+                    sb.append(p.child("timestamp").getValue(Long::class.java) ?: 0).append('~')
+                    sb.append(p.child("authorNick").getValue(String::class.java) ?: "").append('~')
+                    sb.append(p.child("text").getValue(String::class.java) ?: "").append('~')
+                    sb.append(p.child("images").getValue(String::class.java) ?: "").append(';')
                 }
                 val sig = sb.toString()
                 if (sig == lastFeedSig) return
@@ -818,13 +880,17 @@ class MainActivity : Activity() {
                         val nickView = tv(authorNick, 15f, fSemi, P.text)
                         nickView.setOnClickListener { openUserProfile(authorId, authorNick) }
                         val timeView = tv(timeStr, 12f, fReg, P.textSec)
-                        nickTime.addView(nickView); nickTime.addView(timeView)
-                        header.addView(avatarImg); header.addView(nickTime)
+                        nickTime.addView(nickView)
+                        nickTime.addView(timeView)
+                        header.addView(avatarImg)
+                        header.addView(nickTime)
                         card.addView(header)
 
                         if (text.isNotEmpty()) {
                             val bt = TextView(this@MainActivity)
-                            bt.typeface = fReg; bt.textSize = 15f; bt.setTextColor(P.text)
+                            bt.typeface = fReg
+                            bt.textSize = 15f
+                            bt.setTextColor(P.text)
                             bt.setPadding(dp(14), 0, dp(14), dp(12))
                             bt.layoutParams = lp(-1, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
                             Linkify.addLinks(bt, Linkify.WEB_URLS)
@@ -843,12 +909,15 @@ class MainActivity : Activity() {
                                     val bm = LinearLayout.LayoutParams(-1, imgW)
                                     bm.setMargins(dp(14), 0, dp(14), dp(12))
                                     box.layoutParams = bm
-                                    box.background = surf(14, filled = true); box.clipToOutline = true
+                                    box.background = surf(14, filled = true)
+                                    box.clipToOutline = true
                                     val iv = ImageView(this@MainActivity)
-                                    iv.setImageBitmap(b); iv.scaleType = ImageView.ScaleType.CENTER_CROP
+                                    iv.setImageBitmap(b)
+                                    iv.scaleType = ImageView.ScaleType.CENTER_CROP
                                     iv.layoutParams = FrameLayout.LayoutParams(-1, -1)
                                     iv.setOnClickListener { openViewer(images, 0) }
-                                    box.addView(iv); card.addView(box)
+                                    box.addView(iv)
+                                    card.addView(box)
                                 }
                             } else {
                                 val grid = LinearLayout(this@MainActivity)
@@ -868,29 +937,36 @@ class MainActivity : Activity() {
                                             val b = decodeScaled(images[idx], cell)
                                             if (b != null) {
                                                 val box = FrameLayout(this@MainActivity)
-                                                box.layoutParams = lp(0, cell, 0); wt(box, 1f)
+                                                box.layoutParams = lp(0, cell, 0)
+                                                wt(box, 1f)
                                                 (box.layoutParams as LinearLayout.LayoutParams).marginEnd = if (ci == 0) dp(4) else 0
-                                                box.background = surf(12, filled = true); box.clipToOutline = true
+                                                box.background = surf(12, filled = true)
+                                                box.clipToOutline = true
                                                 val iv = ImageView(this@MainActivity)
-                                                iv.setImageBitmap(b); iv.scaleType = ImageView.ScaleType.CENTER_CROP
+                                                iv.setImageBitmap(b)
+                                                iv.scaleType = ImageView.ScaleType.CENTER_CROP
                                                 iv.layoutParams = FrameLayout.LayoutParams(-1, -1)
                                                 val kk = idx
                                                 iv.setOnClickListener { openViewer(images, kk) }
-                                                box.addView(iv); row.addView(box)
+                                                box.addView(iv)
+                                                row.addView(box)
                                             } else {
                                                 val empty = View(this@MainActivity)
-                                                empty.layoutParams = lp(0, cell, 0); wt(empty, 1f)
+                                                empty.layoutParams = lp(0, cell, 0)
+                                                wt(empty, 1f)
                                                 (empty.layoutParams as LinearLayout.LayoutParams).marginEnd = if (ci == 0) dp(4) else 0
                                                 row.addView(empty)
                                             }
                                         } else {
                                             val empty = View(this@MainActivity)
-                                            empty.layoutParams = lp(0, cell, 0); wt(empty, 1f)
+                                            empty.layoutParams = lp(0, cell, 0)
+                                            wt(empty, 1f)
                                             (empty.layoutParams as LinearLayout.LayoutParams).marginEnd = if (ci == 0) dp(4) else 0
                                             row.addView(empty)
                                         }
                                     }
-                                    grid.addView(row); ri += 2
+                                    grid.addView(row)
+                                    ri += 2
                                 }
                                 card.addView(grid)
                             }
@@ -906,7 +982,8 @@ class MainActivity : Activity() {
                         val likeBox = LinearLayout(this@MainActivity)
                         likeBox.orientation = LinearLayout.HORIZONTAL
                         likeBox.gravity = Gravity.CENTER_VERTICAL
-                        likeBox.addView(heartIv); likeBox.addView(countTv)
+                        likeBox.addView(heartIv)
+                        likeBox.addView(countTv)
                         val likedBy = post.child("likedBy").children.map { it.key }.toSet()
                         attachLike(likeBox, countTv, heartIv, postId, currentUserId in likedBy)
                         act.addView(likeBox)
@@ -932,60 +1009,157 @@ class MainActivity : Activity() {
     }
 
     private fun openUserProfile(userId: String, nick: String) {
-        viewingUserId = userId; viewingNick = nick; profileMode = 0; showTab(3)
+        viewingUserId = userId
+        viewingNick = nick
+        profileMode = 0
+        showTab(3)
     }
 
     private fun openViewer(images: List<String>, start: Int) {
         if (images.isEmpty()) return
         val dlg = Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen)
         val frame = FrameLayout(this)
-        frame.setBackgroundColor(if (isDark()) 0xFF000000.toInt() else 0xFF000000.toInt())
+        frame.setBackgroundColor(0xFF000000.toInt())
         val img = ImageView(this)
         img.scaleType = ImageView.ScaleType.MATRIX
         frame.addView(img, FrameLayout.LayoutParams(-1, -1))
+
         val back = TextView(this)
-        back.text = "←"; back.setTextColor(0xFFFFFFFF.toInt()); back.textSize = 28f; back.typeface = fBold
-        back.setPadding(dp(16), dp(10), dp(16), dp(10)); back.setBackgroundColor(P.scrim)
+        back.text = "←"
+        back.setTextColor(0xFFFFFFFF.toInt())
+        back.textSize = 28f
+        back.typeface = fBold
+        back.setPadding(dp(16), dp(10), dp(16), dp(10))
+        back.setBackgroundColor(P.scrim)
         val blp = FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT)
         blp.gravity = Gravity.TOP or Gravity.START
-        frame.addView(back, blp); back.setOnClickListener { dlg.dismiss() }
+        frame.addView(back, blp)
+        back.setOnClickListener { dlg.dismiss() }
+
         val bar = LinearLayout(this)
-        bar.orientation = LinearLayout.HORIZONTAL; bar.setBackgroundColor(P.scrim)
-        val prevB = Button(this); prevB.text = "◀"; prevB.setTextColor(0xFFFFFFFF.toInt())
-        prevB.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0); wt(prevB, 1f)
-        val cnt = TextView(this); cnt.setTextColor(0xFFFFFFFF.toInt()); cnt.gravity = Gravity.CENTER; cnt.typeface = fSemi
-        cnt.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0); wt(cnt, 2f)
-        val nextB = Button(this); nextB.text = "▶"; nextB.setTextColor(0xFFFFFFFF.toInt())
-        nextB.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0); wt(nextB, 1f)
-        bar.addView(prevB); bar.addView(cnt); bar.addView(nextB)
+        bar.orientation = LinearLayout.HORIZONTAL
+        bar.setBackgroundColor(P.scrim)
+        val prevB = Button(this)
+        prevB.text = "◀"
+        prevB.setTextColor(0xFFFFFFFF.toInt())
+        prevB.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
+        wt(prevB, 1f)
+        val cnt = TextView(this)
+        cnt.setTextColor(0xFFFFFFFF.toInt())
+        cnt.gravity = Gravity.CENTER
+        cnt.typeface = fSemi
+        cnt.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
+        wt(cnt, 2f)
+        val nextB = Button(this)
+        nextB.text = "▶"
+        nextB.setTextColor(0xFFFFFFFF.toInt())
+        nextB.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
+        wt(nextB, 1f)
+        bar.addView(prevB)
+        bar.addView(cnt)
+        bar.addView(nextB)
         val brp = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT)
-        brp.gravity = Gravity.BOTTOM; frame.addView(bar, brp)
-        dlg.setContentView(frame); dlg.show()
+        brp.gravity = Gravity.BOTTOM
+        frame.addView(bar, brp)
+
+        dlg.setContentView(frame)
+        dlg.show()
+
         var idx = start.coerceIn(0, images.size - 1)
-        var scale = 1f; var minS = 1f; var maxS = ZOOM_MAX; var panX = 0f; var panY = 0f
+        var scale = 1f
+        var minS = 1f
+        var maxS = ZOOM_MAX
+        var panX = 0f
+        var panY = 0f
         var bmp: Bitmap? = null
-        fun clampPan(vw: Int, vh: Int) { val b = bmp ?: return
-            val mx = maxOf(0f, (b.width * scale - vw) / 2f); val my = maxOf(0f, (b.height * scale - vh) / 2f)
-            panX = panX.coerceIn(-mx, mx); panY = panY.coerceIn(-my, my) }
-        fun applyM() { val b = bmp ?: return; val vw = img.width; val vh = img.height; if (vw == 0 || vh == 0) return
-            clampPan(vw, vh); val m = android.graphics.Matrix(); m.postScale(scale, scale)
-            m.postTranslate((vw - b.width * scale) / 2f + panX, (vh - b.height * scale) / 2f + panY); img.imageMatrix = m }
-        fun setup(b: Bitmap) { bmp = b; val vw = img.width; val vh = img.height
-            if (vw == 0 || vh == 0) { img.post { setup(b) }; return }
-            val fit = minOf(vw.toFloat() / b.width, vh.toFloat() / b.height); minS = minOf(fit, 1f); maxS = ZOOM_MAX
-            scale = minOf(fit, 1f); panX = 0f; panY = 0f; applyM() }
-        fun show() { val b = decodeScaled(images[idx], maxOf(img.width, img.height))
-            if (b != null) { img.setImageBitmap(b); img.post { setup(b) } }
-            cnt.text = "${idx + 1} / ${images.size}"; prevB.isEnabled = idx > 0; nextB.isEnabled = idx < images.size - 1 }
-        prevB.setOnClickListener { if (idx > 0) { idx--; show() } }
-        nextB.setOnClickListener { if (idx < images.size - 1) { idx++; show() } }
+
+        fun clampPan(vw: Int, vh: Int) {
+            val b = bmp ?: return
+            val mx = maxOf(0f, (b.width * scale - vw) / 2f)
+            val my = maxOf(0f, (b.height * scale - vh) / 2f)
+            panX = panX.coerceIn(-mx, mx)
+            panY = panY.coerceIn(-my, my)
+        }
+
+        fun applyM() {
+            val b = bmp ?: return
+            val vw = img.width
+            val vh = img.height
+            if (vw == 0 || vh == 0) return
+            clampPan(vw, vh)
+            val m = Matrix()
+            m.postScale(scale, scale)
+            m.postTranslate((vw - b.width * scale) / 2f + panX, (vh - b.height * scale) / 2f + panY)
+            img.imageMatrix = m
+        }
+
+        fun setup(b: Bitmap) {
+            bmp = b
+            val vw = img.width
+            val vh = img.height
+            if (vw == 0 || vh == 0) {
+                img.post { setup(b) }
+                return
+            }
+            val fit = minOf(vw.toFloat() / b.width, vh.toFloat() / b.height)
+            minS = minOf(fit, 1f)
+            maxS = ZOOM_MAX
+            scale = minOf(fit, 1f)
+            panX = 0f
+            panY = 0f
+            applyM()
+        }
+
+        fun show() {
+            val req = maxOf(resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels)
+            val b = decodeScaled(images[idx], req)
+            if (b != null) {
+                img.setImageBitmap(b)
+                img.post { setup(b) }
+            }
+            cnt.text = "${idx + 1} / ${images.size}"
+            prevB.isEnabled = idx > 0
+            nextB.isEnabled = idx < images.size - 1
+        }
+
+        prevB.setOnClickListener {
+            if (idx > 0) {
+                idx--
+                show()
+            }
+        }
+        nextB.setOnClickListener {
+            if (idx < images.size - 1) {
+                idx++
+                show()
+            }
+        }
+
         val sgd = ScaleGestureDetector(this, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
-            override fun onScale(d: ScaleGestureDetector): Boolean { scale = (scale * d.scaleFactor).coerceIn(minS, maxS); applyM(); return true } })
+            override fun onScale(d: ScaleGestureDetector): Boolean {
+                scale = (scale * d.scaleFactor).coerceIn(minS, maxS)
+                applyM()
+                return true
+            }
+        })
+
         val gd = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
-            override fun onDown(e: MotionEvent) = true
+            override fun onDown(e: MotionEvent): Boolean = true
             override fun onScroll(e1: MotionEvent?, e2: MotionEvent, dx: Float, dy: Float): Boolean {
-                if (scale > minS + 0.001f) { panX -= dx; panY -= dy; applyM() }; return true } })
-        img.setOnTouchListener { _, ev -> sgd.onTouchEvent(ev); gd.onTouchEvent(ev); true }
+                if (scale > minS + 0.001f) {
+                    panX -= dx
+                    panY -= dy
+                    applyM()
+                }
+                return true
+            }
+        })
+
+        img.setOnTouchListener { _, ev ->
+            sgd.onTouchEvent(ev)
+            gd.onTouchEvent(ev)
+            true
+        }
         show()
     }
 
@@ -1006,54 +1180,90 @@ class MainActivity : Activity() {
         rowSearch.orientation = LinearLayout.HORIZONTAL
         rowSearch.layoutParams = lp(-1, -2, dp(14))
         searchField = field("Поиск по нику")
-        searchField.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0); wt(searchField, 2f)
+        searchField.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
+        wt(searchField, 2f)
         val searchIv = iconRound(R.drawable.ic_search, P.text, dp(46))
-        searchIv.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0); wt(searchIv, 1f)
+        searchIv.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
+        wt(searchIv, 1f)
         (searchIv.layoutParams as LinearLayout.LayoutParams).marginStart = dp(8)
-        rowSearch.addView(searchField); rowSearch.addView(searchIv)
-        searchResults = LinearLayout(this); searchResults.orientation = LinearLayout.VERTICAL
-        chatListRows = LinearLayout(this); chatListRows.orientation = LinearLayout.VERTICAL
-        val listScroll = ScrollView(this); listScroll.addView(chatListRows)
-        listScroll.layoutParams = lp(-1, 0, 0); wt(listScroll, 1f); listScroll.isVerticalScrollBarEnabled = false
-        chatListRoot.addView(head); chatListRoot.addView(chatStatus); chatListRoot.addView(rowSearch)
-        chatListRoot.addView(searchResults); chatListRoot.addView(listScroll)
+        rowSearch.addView(searchField)
+        rowSearch.addView(searchIv)
+        searchResults = LinearLayout(this)
+        searchResults.orientation = LinearLayout.VERTICAL
+        chatListRows = LinearLayout(this)
+        chatListRows.orientation = LinearLayout.VERTICAL
+        val listScroll = ScrollView(this)
+        listScroll.addView(chatListRows)
+        listScroll.layoutParams = lp(-1, 0, 0)
+        wt(listScroll, 1f)
+        listScroll.isVerticalScrollBarEnabled = false
+        chatListRoot.addView(head)
+        chatListRoot.addView(chatStatus)
+        chatListRoot.addView(rowSearch)
+        chatListRoot.addView(searchResults)
+        chatListRoot.addView(listScroll)
 
-        convRoot = LinearLayout(this); convRoot.orientation = LinearLayout.VERTICAL; convRoot.visibility = View.GONE
+        convRoot = LinearLayout(this)
+        convRoot.orientation = LinearLayout.VERTICAL
+        convRoot.visibility = View.GONE
         convRoot.setBackgroundColor(P.bg)
-        val top = LinearLayout(this); top.orientation = LinearLayout.HORIZONTAL; top.gravity = Gravity.CENTER_VERTICAL
-        top.setPadding(dp(4), dp(4), dp(4), dp(10)); top.layoutParams = lp(-1, -2, 0)
+        val top = LinearLayout(this)
+        top.orientation = LinearLayout.HORIZONTAL
+        top.gravity = Gravity.CENTER_VERTICAL
+        top.setPadding(dp(4), dp(4), dp(4), dp(10))
+        top.layoutParams = lp(-1, -2, 0)
         val backIv = iconRound(R.drawable.ic_back, P.text, dp(38))
         convTitle = tv("", 17f, fSemi, P.text)
-        convTitle.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0); wt(convTitle, 1f)
+        convTitle.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
+        wt(convTitle, 1f)
         (convTitle.layoutParams as LinearLayout.LayoutParams).marginStart = dp(12)
-        top.addView(backIv); top.addView(convTitle)
-        convBox = LinearLayout(this); convBox.orientation = LinearLayout.VERTICAL
-        convScroll = ScrollView(this); convScroll.addView(convBox)
-        convScroll.layoutParams = lp(-1, 0, 0); wt(convScroll, 1f); convScroll.isVerticalScrollBarEnabled = false
+        top.addView(backIv)
+        top.addView(convTitle)
+        convBox = LinearLayout(this)
+        convBox.orientation = LinearLayout.VERTICAL
+        convScroll = ScrollView(this)
+        convScroll.addView(convBox)
+        convScroll.layoutParams = lp(-1, 0, 0)
+        wt(convScroll, 1f)
+        convScroll.isVerticalScrollBarEnabled = false
         msgField = field("Сообщение...")
-        val sendIv = ImageView(this); sendIv.setImageResource(R.drawable.ic_send); sendIv.setColorFilter(P.accentText)
-        sendIv.setPadding(dp(12), dp(12), dp(12), dp(12)); sendIv.layoutParams = lp(dp(46), dp(46), 0)
+        val sendIv = ImageView(this)
+        sendIv.setImageResource(R.drawable.ic_send)
+        sendIv.setColorFilter(P.accentText)
+        sendIv.setPadding(dp(12), dp(12), dp(12), dp(12))
+        sendIv.layoutParams = lp(dp(46), dp(46), 0)
         sendIv.background = accentBg(14)
-        val inputRow = LinearLayout(this); inputRow.orientation = LinearLayout.HORIZONTAL; inputRow.gravity = Gravity.CENTER_VERTICAL
+        val inputRow = LinearLayout(this)
+        inputRow.orientation = LinearLayout.HORIZONTAL
+        inputRow.gravity = Gravity.CENTER_VERTICAL
         inputRow.layoutParams = lp(-1, -2, dp(10))
-        msgField.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0); wt(msgField, 1f)
+        msgField.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
+        wt(msgField, 1f)
         (sendIv.layoutParams as LinearLayout.LayoutParams).marginStart = dp(8)
-        inputRow.addView(msgField); inputRow.addView(sendIv)
-        convRoot.addView(top); convRoot.addView(convScroll); convRoot.addView(inputRow)
+        inputRow.addView(msgField)
+        inputRow.addView(sendIv)
+        convRoot.addView(top)
+        convRoot.addView(convScroll)
+        convRoot.addView(inputRow)
 
         searchIv.setOnClickListener {
-            val q = searchField.text.toString().trim().lowercase(); if (q.isEmpty()) return@setOnClickListener
+            val q = searchField.text.toString().trim().lowercase()
+            if (q.isEmpty()) return@setOnClickListener
             searchResults.removeAllViews()
             database.child("users").addListenerForSingleValueEvent(object : ValueEventListener {
                 override fun onDataChange(snapshot: DataSnapshot) {
                     for (u in snapshot.children) {
                         val nick = u.child("nick").getValue(String::class.java) ?: ""
                         if (nick.lowercase().contains(q) && u.key != currentUserId) {
-                            val row = LinearLayout(this@MainActivity); row.orientation = LinearLayout.HORIZONTAL
-                            row.gravity = Gravity.CENTER_VERTICAL; row.background = surf(14, filled = true)
-                            row.layoutParams = lp(-1, -2, dp(6)); row.setPadding(dp(12), dp(10), dp(12), dp(10))
+                            val row = LinearLayout(this@MainActivity)
+                            row.orientation = LinearLayout.HORIZONTAL
+                            row.gravity = Gravity.CENTER_VERTICAL
+                            row.background = surf(14, filled = true)
+                            row.layoutParams = lp(-1, -2, dp(6))
+                            row.setPadding(dp(12), dp(10), dp(12), dp(10))
                             row.addView(avatarView(null, dp(34), nick))
-                            val nt = tv(nick, 15f, fMed, P.text); (nt.layoutParams as LinearLayout.LayoutParams).marginStart = dp(12)
+                            val nt = tv(nick, 15f, fMed, P.text)
+                            (nt.layoutParams as LinearLayout.LayoutParams).marginStart = dp(12)
                             row.addView(nt)
                             row.setOnClickListener { openChat(u.key ?: "", nick); searchResults.removeAllViews() }
                             searchResults.addView(row)
@@ -1064,22 +1274,38 @@ class MainActivity : Activity() {
                 override fun onCancelled(error: DatabaseError) {}
             })
         }
-        backIv.setOnClickListener { currentChat = ""; convRoot.visibility = View.GONE; chatListRoot.visibility = View.VISIBLE }
+
+        backIv.setOnClickListener {
+            currentChat = ""
+            convRoot.visibility = View.GONE
+            chatListRoot.visibility = View.VISIBLE
+        }
+
         sendIv.setOnClickListener {
-            val text = msgField.text.toString(); if (text.isEmpty() || currentChat.isEmpty()) return@setOnClickListener
+            val text = msgField.text.toString()
+            if (text.isEmpty() || currentChat.isEmpty()) return@setOnClickListener
             val msgId = database.child("chats").child(currentChat).child("messages").push().key ?: return@setOnClickListener
             val msg = HashMap<String, Any>()
-            msg["senderId"] = currentUserId; msg["senderNick"] = currentNick; msg["text"] = text; msg["timestamp"] = System.currentTimeMillis()
-            database.child("chats").child(currentChat).child("messages").child(msgId).setValue(msg); msgField.setText("")
+            msg["senderId"] = currentUserId
+            msg["senderNick"] = currentNick
+            msg["text"] = text
+            msg["timestamp"] = System.currentTimeMillis()
+            database.child("chats").child(currentChat).child("messages").child(msgId).setValue(msg)
+            msgField.setText("")
         }
-        col.addView(chatListRoot); col.addView(convRoot)
+
+        col.addView(chatListRoot)
+        col.addView(convRoot)
         return col
     }
 
     private fun openChat(otherUserId: String, otherNick: String) {
         currentChat = if (currentUserId < otherUserId) "${currentUserId}_$otherUserId" else "${otherUserId}_$currentUserId"
-        convTitle.text = otherNick; chatListRoot.visibility = View.GONE; convRoot.visibility = View.VISIBLE
-        convBox.removeAllViews(); loadMessages()
+        convTitle.text = otherNick
+        chatListRoot.visibility = View.GONE
+        convRoot.visibility = View.VISIBLE
+        convBox.removeAllViews()
+        loadMessages()
     }
 
     private fun loadMessages() {
@@ -1092,14 +1318,25 @@ class MainActivity : Activity() {
                         val ts = msg.child("timestamp").getValue(Long::class.java) ?: 0
                         val isMe = msg.child("senderId").getValue(String::class.java) == currentUserId
                         val timeStr = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(ts))
-                        val row = LinearLayout(this@MainActivity); row.orientation = LinearLayout.HORIZONTAL
-                        row.gravity = if (isMe) Gravity.END else Gravity.START; row.layoutParams = lp(-1, -2, dp(4))
-                        val bubble = LinearLayout(this@MainActivity); bubble.orientation = LinearLayout.VERTICAL
-                        if (isMe) { bubble.background = accentBg(18); bubble.setPadding(dp(14), dp(10), dp(14), dp(6)) }
-                        else { bubble.background = surf(18, filled = true); bubble.setPadding(dp(14), dp(10), dp(14), dp(6)) }
+                        val row = LinearLayout(this@MainActivity)
+                        row.orientation = LinearLayout.HORIZONTAL
+                        row.gravity = if (isMe) Gravity.END else Gravity.START
+                        row.layoutParams = lp(-1, -2, dp(4))
+                        val bubble = LinearLayout(this@MainActivity)
+                        bubble.orientation = LinearLayout.VERTICAL
+                        if (isMe) {
+                            bubble.background = accentBg(18)
+                        } else {
+                            bubble.background = surf(18, filled = true)
+                        }
+                        bubble.setPadding(dp(14), dp(10), dp(14), dp(6))
                         val mt = tv(text, 15f, fReg, if (isMe) P.accentText else P.text)
-                        val tt = tv(timeStr, 10f, fReg, if (isMe) P.accentText else P.textSec); tt.gravity = Gravity.END
-                        bubble.addView(mt); bubble.addView(tt); row.addView(bubble); convBox.addView(row)
+                        val tt = tv(timeStr, 10f, fReg, if (isMe) P.accentText else P.textSec)
+                        tt.gravity = Gravity.END
+                        bubble.addView(mt)
+                        bubble.addView(tt)
+                        row.addView(bubble)
+                        convBox.addView(row)
                     }
                     convScroll.post { convScroll.fullScroll(View.FOCUS_DOWN) }
                 }
@@ -1109,49 +1346,68 @@ class MainActivity : Activity() {
 
     // ================= ВИДЕО =================
     private fun buildVideo(): View {
-        val col = LinearLayout(this); col.orientation = LinearLayout.VERTICAL; col.gravity = Gravity.CENTER
-        col.setBackgroundColor(P.bg); col.setPadding(dp(24), dp(24), dp(24), 24)
-        val card = LinearLayout(this); card.orientation = LinearLayout.VERTICAL; card.gravity = Gravity.CENTER
-        card.background = surf(20, filled = true); card.setPadding(dp(28), dp(40), dp(28), dp(40))
+        val col = LinearLayout(this)
+        col.orientation = LinearLayout.VERTICAL
+        col.gravity = Gravity.CENTER
+        col.setBackgroundColor(P.bg)
+        col.setPadding(dp(24), dp(24), dp(24), 24)
+        val card = LinearLayout(this)
+        card.orientation = LinearLayout.VERTICAL
+        card.gravity = Gravity.CENTER
+        card.background = surf(20, filled = true)
+        card.setPadding(dp(28), dp(40), dp(28), dp(40))
         card.addView(icon(R.drawable.ic_video, P.text, dp(48)))
-        val t = tv("Видео скоро", 18f, fBold, P.text); t.layoutParams = lp(-2, -2, dp(6)); t.gravity = Gravity.CENTER
-        val s = tv("Здесь появится лента клипов", 14f, fReg, P.textSec); s.gravity = Gravity.CENTER
-        card.addView(t); card.addView(s); col.addView(card)
+        val t = tv("Видео скоро", 18f, fBold, P.text)
+        t.layoutParams = lp(-2, -2, dp(6))
+        t.gravity = Gravity.CENTER
+        val s = tv("Здесь появится лента клипов", 14f, fReg, P.textSec)
+        s.gravity = Gravity.CENTER
+        card.addView(t)
+        card.addView(s)
+        col.addView(card)
         return col
     }
 
     // ================= ПРОФИЛЬ =================
     private fun buildProfile(): View {
-        profileRoot = LinearLayout(this); profileRoot.orientation = LinearLayout.VERTICAL
+        profileRoot = LinearLayout(this)
+        profileRoot.orientation = LinearLayout.VERTICAL
         profileRoot.setBackgroundColor(P.bg)
-        profileScroll = ScrollView(this); profileScroll.layoutParams = lp(-1, -1); profileScroll.isVerticalScrollBarEnabled = false
-        val content = LinearLayout(this); content.orientation = LinearLayout.VERTICAL; content.setPadding(dp(18), dp(14), dp(18), 0)
+        profileScroll = ScrollView(this)
+        profileScroll.layoutParams = lp(-1, -1)
+        profileScroll.isVerticalScrollBarEnabled = false
+        val content = LinearLayout(this)
+        content.orientation = LinearLayout.VERTICAL
+        content.setPadding(dp(18), dp(14), dp(18), 0)
 
-        val nickRow = LinearLayout(this); nickRow.orientation = LinearLayout.HORIZONTAL; nickRow.gravity = Gravity.CENTER_VERTICAL
+        val nickRow = LinearLayout(this)
+        nickRow.orientation = LinearLayout.HORIZONTAL
+        nickRow.gravity = Gravity.CENTER_VERTICAL
         nickRow.layoutParams = lp(-1, -2, dp(16))
         profileNick = tv("@", 22f, fBold, P.text)
-        profileNick.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0); wt(profileNick, 1f)
+        profileNick.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
+        wt(profileNick, 1f)
         profileSettingsIv = iconRound(R.drawable.ic_settings, P.text, dp(38))
         profileSettingsIv.setOnClickListener { showSettingsDialog() }
         profileEditIv = iconRound(R.drawable.ic_edit, P.text, dp(38))
         (profileEditIv.layoutParams as LinearLayout.LayoutParams).marginStart = dp(8)
-        nickRow.addView(profileNick); nickRow.addView(profileSettingsIv); nickRow.addView(profileEditIv)
+        nickRow.addView(profileNick)
+        nickRow.addView(profileSettingsIv)
+        nickRow.addView(profileEditIv)
         content.addView(nickRow)
 
-        val infoRow = LinearLayout(this); infoRow.orientation = LinearLayout.HORIZONTAL; infoRow.gravity = Gravity.CENTER_VERTICAL
+        val infoRow = LinearLayout(this)
+        infoRow.orientation = LinearLayout.HORIZONTAL
+        infoRow.gravity = Gravity.CENTER_VERTICAL
         infoRow.layoutParams = lp(-1, -2, dp(16))
-        profileAvatar = ImageView(this); profileAvatar.layoutParams = lp(dp(84), dp(84), 0)
+        profileAvatar = ImageView(this)
+        profileAvatar.layoutParams = lp(dp(84), dp(84), 0)
         (profileAvatar.layoutParams as LinearLayout.LayoutParams).marginEnd = dp(20)
         profileAvatar.scaleType = ImageView.ScaleType.FIT_CENTER
-        profilePostsCount = TextView(this); profileFollowersCount = TextView(this)
-        profileFollowingCount = TextView(this); profileLikesCount = TextView(this)
-        fun statCol(num: TextView, label: String): LinearLayout {
-            val c = LinearLayout(this); c.orientation = LinearLayout.VERTICAL; c.gravity = Gravity.CENTER
-            c.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0); wt(c, 1f)
-            num.gravity = Gravity.CENTER; num.textSize = 18f; num.typeface = fBold; num.setTextColor(P.text)
-            val l = tv(label, 11f, fReg, P.textSec); l.gravity = Gravity.CENTER
-            c.addView(num); c.addView(l); return c
-        }
+        profilePostsCount = TextView(this)
+        profileFollowersCount = TextView(this)
+        profileFollowingCount = TextView(this)
+        profileLikesCount = TextView(this)
         infoRow.addView(profileAvatar)
         infoRow.addView(statCol(profilePostsCount, "посты"))
         infoRow.addView(statCol(profileFollowersCount, "подписчики"))
@@ -1159,57 +1415,101 @@ class MainActivity : Activity() {
         infoRow.addView(statCol(profileLikesCount, "лайки"))
         content.addView(infoRow)
 
-        profileName = tv("", 15f, fSemi, P.text); profileName.layoutParams = lp(-1, -2, dp(2))
-        profileBio = tv("", 14f, fReg, P.text); profileBio.layoutParams = lp(-1, -2, dp(14))
-        content.addView(profileName); content.addView(profileBio)
+        profileName = tv("", 15f, fSemi, P.text)
+        profileName.layoutParams = lp(-1, -2, dp(2))
+        profileBio = tv("", 14f, fReg, P.text)
+        profileBio.layoutParams = lp(-1, -2, dp(14))
+        content.addView(profileName)
+        content.addView(profileBio)
 
-        val btnRow = LinearLayout(this); btnRow.orientation = LinearLayout.HORIZONTAL; btnRow.layoutParams = lp(-1, -2, dp(16))
+        val btnRow = LinearLayout(this)
+        btnRow.orientation = LinearLayout.HORIZONTAL
+        btnRow.layoutParams = lp(-1, -2, dp(16))
         profileBtn1 = btnOutline("Редактировать профиль")
-        profileBtn1.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, dp(8)); wt(profileBtn1, 1f)
+        profileBtn1.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, dp(8))
+        wt(profileBtn1, 1f)
         profileBtn2 = btnOutline("Поделиться")
-        profileBtn2.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0); wt(profileBtn2, 1f)
-        btnRow.addView(profileBtn1); btnRow.addView(profileBtn2)
+        profileBtn2.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
+        wt(profileBtn2, 1f)
+        btnRow.addView(profileBtn1)
+        btnRow.addView(profileBtn2)
         content.addView(btnRow)
 
-        val tabRow = LinearLayout(this); tabRow.orientation = LinearLayout.HORIZONTAL
-        tabRow.background = surf(14, filled = true); tabRow.setPadding(dp(4), dp(4), dp(4), dp(4))
+        val tabRow = LinearLayout(this)
+        tabRow.orientation = LinearLayout.HORIZONTAL
+        tabRow.background = surf(14, filled = true)
+        tabRow.setPadding(dp(4), dp(4), dp(4), dp(4))
         tabRow.layoutParams = lp(-1, -2, dp(2))
-        profileTabPosts = icon(R.drawable.ic_grid, P.text, dp(22)); profileTabPosts.setPadding(dp(8), dp(8), dp(8), dp(8))
-        profileTabPosts.layoutParams = lp(0, dp(38), 0); wt(profileTabPosts, 1f)
-        profileTabLikes = icon(R.drawable.ic_heart, P.navInactive, dp(22)); profileTabLikes.setPadding(dp(8), dp(8), dp(8), dp(8))
-        profileTabLikes.layoutParams = lp(0, dp(38), 0); wt(profileTabLikes, 1f)
+        profileTabPosts = icon(R.drawable.ic_grid, P.text, dp(22))
+        profileTabPosts.setPadding(dp(8), dp(8), dp(8), dp(8))
+        profileTabPosts.layoutParams = lp(0, dp(38), 0)
+        wt(profileTabPosts, 1f)
+        profileTabLikes = icon(R.drawable.ic_heart, P.navInactive, dp(22))
+        profileTabLikes.setPadding(dp(8), dp(8), dp(8), dp(8))
+        profileTabLikes.layoutParams = lp(0, dp(38), 0)
+        wt(profileTabLikes, 1f)
         profileTabPosts.setOnClickListener { profileMode = 0; refreshProfile() }
         profileTabLikes.setOnClickListener { profileMode = 1; refreshProfile() }
-        tabRow.addView(profileTabPosts); tabRow.addView(profileTabLikes)
+        tabRow.addView(profileTabPosts)
+        tabRow.addView(profileTabLikes)
         content.addView(tabRow)
 
-        profilePostsGrid = LinearLayout(this); profilePostsGrid.orientation = LinearLayout.VERTICAL
+        profilePostsGrid = LinearLayout(this)
+        profilePostsGrid.orientation = LinearLayout.VERTICAL
         profilePostsGrid.layoutParams = lp(-1, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
         content.addView(profilePostsGrid)
 
-        profileScroll.addView(content); profileRoot.addView(profileScroll)
+        profileScroll.addView(content)
+        profileRoot.addView(profileScroll)
         return profileRoot
+    }
+
+    private fun statCol(num: TextView, label: String): LinearLayout {
+        val c = LinearLayout(this)
+        c.orientation = LinearLayout.VERTICAL
+        c.gravity = Gravity.CENTER
+        c.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
+        wt(c, 1f)
+        num.gravity = Gravity.CENTER
+        num.textSize = 18f
+        num.typeface = fBold
+        num.setTextColor(P.text)
+        val l = tv(label, 11f, fReg, P.textSec)
+        l.gravity = Gravity.CENTER
+        c.addView(num)
+        c.addView(l)
+        return c
     }
 
     // ================= НАСТРОЙКИ (переключатель темы) =================
     private fun showSettingsDialog() {
         val dlg = Dialog(this)
-        dlg.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
-        val root = LinearLayout(this); root.orientation = LinearLayout.VERTICAL
-        root.background = surf(20, filled = true); root.setPadding(dp(20), dp(18), dp(20), dp(20))
+        dlg.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+        val root = LinearLayout(this)
+        root.orientation = LinearLayout.VERTICAL
+        root.background = surf(20, filled = true)
+        root.setPadding(dp(20), dp(18), dp(20), dp(20))
         val width = (resources.displayMetrics.widthPixels * 0.86).toInt()
-        val lp = FrameLayout.LayoutParams(width, FrameLayout.LayoutParams.WRAP_CONTENT)
-        lp.gravity = Gravity.CENTER
-        val wrap = FrameLayout(this); wrap.addView(root, lp)
+        val wrap = FrameLayout(this)
+        val rlp = FrameLayout.LayoutParams(width, FrameLayout.LayoutParams.WRAP_CONTENT)
+        rlp.gravity = Gravity.CENTER
+        wrap.addView(root, rlp)
 
-        val head = LinearLayout(this); head.orientation = LinearLayout.HORIZONTAL; head.gravity = Gravity.CENTER_VERTICAL
+        val head = LinearLayout(this)
+        head.orientation = LinearLayout.HORIZONTAL
+        head.gravity = Gravity.CENTER_VERTICAL
         head.layoutParams = lp(-1, -2, dp(16))
-        val title = tv("Настройки", 18f, fBold, P.text); title.layoutParams = lp(0, -2, 0); wt(title, 1f)
-        val closeIv = iconRound(R.drawable.ic_close, P.text, dp(34)); closeIv.setOnClickListener { dlg.dismiss() }
-        head.addView(title); head.addView(closeIv)
+        val title = tv("Настройки", 18f, fBold, P.text)
+        title.layoutParams = lp(0, -2, 0)
+        wt(title, 1f)
+        val closeIv = iconRound(R.drawable.ic_close, P.text, dp(34))
+        closeIv.setOnClickListener { dlg.dismiss() }
+        head.addView(title)
+        head.addView(closeIv)
         root.addView(head)
 
-        val lbl = tv("Тема оформления", 13f, fMed, P.textSec); lbl.layoutParams = lp(-1, -2, dp(10))
+        val lbl = tv("Тема оформления", 13f, fMed, P.textSec)
+        lbl.layoutParams = lp(-1, -2, dp(10))
         root.addView(lbl)
 
         val darkNow = isDark()
@@ -1218,7 +1518,9 @@ class MainActivity : Activity() {
         val darkOpt = themeOption("Тёмная", darkNow)
         darkOpt.setOnClickListener { setThemeAndRestart(true); dlg.dismiss() }
         root.addView(lightOpt)
-        val gap = View(this); gap.layoutParams = lp(-1, dp(8), 0); root.addView(gap)
+        val gap = View(this)
+        gap.layoutParams = lp(-1, dp(8), 0)
+        root.addView(gap)
         root.addView(darkOpt)
 
         dlg.setContentView(wrap)
@@ -1227,17 +1529,22 @@ class MainActivity : Activity() {
     }
 
     private fun themeOption(label: String, selected: Boolean): LinearLayout {
-        val row = LinearLayout(this); row.orientation = LinearLayout.HORIZONTAL; row.gravity = Gravity.CENTER_VERTICAL
+        val row = LinearLayout(this)
+        row.orientation = LinearLayout.HORIZONTAL
+        row.gravity = Gravity.CENTER_VERTICAL
         row.background = if (selected) surf(12, filled = true) else surf(12, filled = false)
         row.setPadding(dp(16), dp(14), dp(16), dp(14))
         row.layoutParams = lp(-1, -2, 0)
-        val dot = View(this); dot.layoutParams = lp(dp(12), dp(12), 0)
-        val dg = GradientDrawable(); dg.shape = GradientDrawable.OVAL
+        val dot = View(this)
+        dot.layoutParams = lp(dp(12), dp(12), 0)
+        val dg = GradientDrawable()
+        dg.shape = GradientDrawable.OVAL
         dg.setColor(if (selected) P.accent else P.border)
         dot.background = dg
         (dot.layoutParams as LinearLayout.LayoutParams).marginEnd = dp(12)
         val t = tv(label, 15f, if (selected) fSemi else fReg, P.text)
-        row.addView(dot); row.addView(t)
+        row.addView(dot)
+        row.addView(t)
         return row
     }
 
@@ -1249,59 +1556,96 @@ class MainActivity : Activity() {
     private fun showEditProfileDialog() {
         if (viewingUserId != currentUserId) return
         val dlg = Dialog(this)
-        dlg.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
-        val layout = LinearLayout(this); layout.orientation = LinearLayout.VERTICAL
-        layout.background = surf(20, filled = true); layout.setPadding(dp(20), dp(18), dp(20), dp(20))
+        dlg.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+        val layout = LinearLayout(this)
+        layout.orientation = LinearLayout.VERTICAL
+        layout.background = surf(20, filled = true)
+        layout.setPadding(dp(20), dp(18), dp(20), dp(20))
         val width = (resources.displayMetrics.widthPixels * 0.9).toInt()
         val wrap = FrameLayout(this)
-        wrap.addView(layout, FrameLayout.LayoutParams(width, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
+        val wlp = FrameLayout.LayoutParams(width, FrameLayout.LayoutParams.WRAP_CONTENT)
+        wlp.gravity = Gravity.CENTER
+        wrap.addView(layout, wlp)
 
-        val headerLayout = LinearLayout(this); headerLayout.orientation = LinearLayout.HORIZONTAL; headerLayout.gravity = Gravity.CENTER_VERTICAL
+        val headerLayout = LinearLayout(this)
+        headerLayout.orientation = LinearLayout.HORIZONTAL
+        headerLayout.gravity = Gravity.CENTER_VERTICAL
         headerLayout.layoutParams = lp(-1, -2, dp(16))
-        val backIv = iconRound(R.drawable.ic_close, P.text, dp(36)); backIv.setOnClickListener { dlg.dismiss() }
+        val backIv = iconRound(R.drawable.ic_close, P.text, dp(36))
+        backIv.setOnClickListener { dlg.dismiss() }
         val title = tv("Редактировать", 17f, fBold, P.text)
-        title.layoutParams = lp(0, -2, 0); wt(title, 1f)
+        title.layoutParams = lp(0, -2, 0)
+        wt(title, 1f)
         (title.layoutParams as LinearLayout.LayoutParams).marginStart = dp(12)
-        headerLayout.addView(backIv); headerLayout.addView(title)
+        headerLayout.addView(backIv)
+        headerLayout.addView(title)
 
-        val avatarLayout = LinearLayout(this); avatarLayout.orientation = LinearLayout.VERTICAL; avatarLayout.gravity = Gravity.CENTER_HORIZONTAL
+        val avatarLayout = LinearLayout(this)
+        avatarLayout.orientation = LinearLayout.VERTICAL
+        avatarLayout.gravity = Gravity.CENTER_HORIZONTAL
         avatarLayout.layoutParams = lp(-1, -2, dp(16))
         editAvatarView = ImageView(this)
-        val alp = LinearLayout.LayoutParams(dp(96), dp(96)); alp.bottomMargin = dp(12); alp.gravity = Gravity.CENTER_HORIZONTAL
-        editAvatarView!!.layoutParams = alp; editAvatarView!!.scaleType = ImageView.ScaleType.FIT_CENTER
+        val alp = LinearLayout.LayoutParams(dp(96), dp(96))
+        alp.bottomMargin = dp(12)
+        alp.gravity = Gravity.CENTER_HORIZONTAL
+        editAvatarView!!.layoutParams = alp
+        editAvatarView!!.scaleType = ImageView.ScaleType.FIT_CENTER
         if (currentAvatar.isNotEmpty()) {
             val b = decodeScaled(currentAvatar, dp(96))
             editAvatarView!!.setImageBitmap(if (b != null) makeCircularBitmap(b, dp(96)) else makeCircularBitmap(createAvatarBitmap(currentNick), dp(96)))
-        } else editAvatarView!!.setImageBitmap(makeCircularBitmap(createAvatarBitmap(currentNick), dp(96)))
+        } else {
+            editAvatarView!!.setImageBitmap(makeCircularBitmap(createAvatarBitmap(currentNick), dp(96)))
+        }
         val changeAvatarBtn = btnOutline("Сменить аватар")
         changeAvatarBtn.layoutParams = lp(-1, -2, 0)
-        avatarLayout.addView(editAvatarView); avatarLayout.addView(changeAvatarBtn)
+        avatarLayout.addView(editAvatarView)
+        avatarLayout.addView(changeAvatarBtn)
 
         val nickEdit = field("Ник (мин. 5 символов)")
-        nickEdit.setText(currentNick); nickEdit.layoutParams = lp(-1, -2, dp(10))
+        nickEdit.setText(currentNick)
+        nickEdit.layoutParams = lp(-1, -2, dp(10))
         val bioEdit = field("Био")
-        bioEdit.setText(profileBio.text.toString()); bioEdit.layoutParams = lp(-1, -2, dp(14))
-        bioEdit.gravity = Gravity.TOP; bioEdit.minLines = 3
+        bioEdit.setText(profileBio.text.toString())
+        bioEdit.layoutParams = lp(-1, -2, dp(14))
+        bioEdit.gravity = Gravity.TOP
+        bioEdit.minLines = 3
         bioEdit.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
-        val saveBtn = btnAccent("Сохранить"); saveBtn.layoutParams = lp(-1, -2, 0)
+        val saveBtn = btnAccent("Сохранить")
+        saveBtn.layoutParams = lp(-1, -2, 0)
 
         changeAvatarBtn.setOnClickListener {
             startActivityForResult(Intent(Intent.ACTION_PICK, MediaStore.Images.Media.EXTERNAL_CONTENT_URI), PICK_AVATAR)
         }
         saveBtn.setOnClickListener {
-            val newNick = nickEdit.text.toString().trim(); val newBio = bioEdit.text.toString().trim()
-            if (newNick.length < 5) { Toast.makeText(this, "Ник минимум 5 символов", Toast.LENGTH_SHORT).show(); return@setOnClickListener }
+            val newNick = nickEdit.text.toString().trim()
+            val newBio = bioEdit.text.toString().trim()
+            if (newNick.length < 5) {
+                Toast.makeText(this, "Ник минимум 5 символов", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
             isNickTaken(newNick, currentUserId) { taken ->
-                if (taken) { Toast.makeText(this@MainActivity, "Ник уже занят", Toast.LENGTH_SHORT).show(); return@isNickTaken }
+                if (taken) {
+                    Toast.makeText(this@MainActivity, "Ник уже занят", Toast.LENGTH_SHORT).show()
+                    return@isNickTaken
+                }
                 if (newNick != currentNick) {
                     database.child("users").child(currentUserId).child("nick").setValue(newNick)
-                    currentNick = newNick; feedHeader.text = "@$newNick"; updatePostsNick(newNick)
+                    currentNick = newNick
+                    feedHeader.text = "@$newNick"
+                    updatePostsNick(newNick)
                 }
                 database.child("users").child(currentUserId).child("bio").setValue(newBio)
-                dlg.dismiss(); refreshProfile(); loadFeed()
+                dlg.dismiss()
+                refreshProfile()
+                loadFeed()
             }
         }
-        layout.addView(headerLayout); layout.addView(avatarLayout); layout.addView(nickEdit); layout.addView(bioEdit); layout.addView(saveBtn)
+
+        layout.addView(headerLayout)
+        layout.addView(avatarLayout)
+        layout.addView(nickEdit)
+        layout.addView(bioEdit)
+        layout.addView(saveBtn)
         dlg.setContentView(wrap)
         dlg.window?.setLayout(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
         dlg.show()
@@ -1319,19 +1663,22 @@ class MainActivity : Activity() {
                 val bio = snapshot.child("bio").getValue(String::class.java) ?: ""
                 val b = if (avatar.isNotEmpty()) decodeScaled(avatar, dp(84)) else null
                 profileAvatar.setImageBitmap(if (b != null) makeCircularBitmap(b, dp(84)) else makeCircularBitmap(createAvatarBitmap(nick), dp(84)))
-                profileNick.text = "@$nick"; profileName.text = nick; profileBio.text = bio
+                profileNick.text = "@$nick"
+                profileName.text = nick
+                profileBio.text = bio
                 profileFollowingCount.text = knownNames.size.toString()
                 if (targetId == currentUserId) {
                     profileBtn1.text = "Редактировать профиль"
                     profileBtn1.setOnClickListener { showEditProfileDialog() }
                     profileEditIv.visibility = View.VISIBLE
                     profileEditIv.setOnClickListener { showEditProfileDialog() }
+                    profileSettingsIv.visibility = View.VISIBLE
                 } else {
                     profileBtn1.text = "Написать"
                     profileBtn1.setOnClickListener { openChat(targetId, nick) }
                     profileEditIv.visibility = View.GONE
+                    profileSettingsIv.visibility = View.GONE
                 }
-                profileSettingsIv.visibility = if (targetId == currentUserId) View.VISIBLE else View.GONE
                 profileBtn2.setOnClickListener {
                     val cm = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
                     cm.setPrimaryClip(android.content.ClipData.newPlainText("nick", "@$nick"))
@@ -1339,12 +1686,16 @@ class MainActivity : Activity() {
                 }
                 database.child("posts").addListenerForSingleValueEvent(object : ValueEventListener {
                     override fun onDataChange(ps: DataSnapshot) {
-                        var ownCount = 0; var sumLikes = 0
+                        var ownCount = 0
+                        var sumLikes = 0
                         val grid = ArrayList<DataSnapshot>()
                         for (p in ps.children) {
                             val isMine = p.child("authorId").getValue(String::class.java) == targetId
                             val liked = p.child("likedBy").child(targetId).value != null
-                            if (isMine) { ownCount++; sumLikes += (p.child("likes").value as? Number)?.toInt() ?: 0 }
+                            if (isMine) {
+                                ownCount++
+                                sumLikes += (p.child("likes").value as? Number)?.toInt() ?: 0
+                            }
                             if (profileMode == 0 && isMine) grid.add(p)
                             if (profileMode == 1 && liked) grid.add(p)
                         }
@@ -1354,22 +1705,27 @@ class MainActivity : Activity() {
                         profilePostsGrid.removeAllViews()
                         if (grid.isEmpty()) {
                             val empty = tv(if (profileMode == 0) "Нет постов" else "Нет лайков", 14f, fMed, P.textSec)
-                            empty.gravity = Gravity.CENTER; empty.setPadding(0, dp(40), 0, dp(40))
-                            profilePostsGrid.addView(empty); return
+                            empty.gravity = Gravity.CENTER
+                            empty.setPadding(0, dp(40), 0, dp(40))
+                            profilePostsGrid.addView(empty)
+                            return
                         }
                         val cell = (resources.displayMetrics.widthPixels - dp(36) - dp(4)) / 3
                         var i = 0
                         while (i < grid.size) {
-                            val row = LinearLayout(this@MainActivity); row.orientation = LinearLayout.HORIZONTAL
+                            val row = LinearLayout(this@MainActivity)
+                            row.orientation = LinearLayout.HORIZONTAL
                             row.layoutParams = lp(-1, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
                             for (c in 0 until 3) {
                                 val idx = i + c
                                 val box = FrameLayout(this@MainActivity)
-                                val p2 = LinearLayout.LayoutParams(cell, cell); p2.setMargins(0, 0, dp(2), dp(2))
+                                val p2 = LinearLayout.LayoutParams(cell, cell)
+                                p2.setMargins(0, 0, dp(2), dp(2))
                                 box.layoutParams = p2
                                 if (idx < grid.size) {
                                     try {
-                                        val p = grid[idx]; val postId = p.key ?: ""
+                                        val p = grid[idx]
+                                        val postId = p.key ?: ""
                                         val imgStr = p.child("images").getValue(String::class.java) ?: ""
                                         val txt = p.child("text").getValue(String::class.java) ?: ""
                                         val lc = (p.child("likes").value as? Number)?.toInt() ?: 0
@@ -1378,7 +1734,8 @@ class MainActivity : Activity() {
                                             if (first != null) {
                                                 val bb = decodeScaled(first, cell)
                                                 if (bb != null) {
-                                                    val iv = ImageView(this@MainActivity); iv.setImageBitmap(bb)
+                                                    val iv = ImageView(this@MainActivity)
+                                                    iv.setImageBitmap(bb)
                                                     iv.scaleType = ImageView.ScaleType.CENTER_CROP
                                                     iv.layoutParams = FrameLayout.LayoutParams(-1, -1)
                                                     val imgs = imgStr.split(",").filter { it.isNotEmpty() }
@@ -1388,21 +1745,27 @@ class MainActivity : Activity() {
                                             }
                                         } else {
                                             box.background = surf(6, filled = true)
-                                            val tt = tv(txt, 11f, fMed, P.text); tt.maxLines = 6; tt.setPadding(dp(6), dp(6), dp(6), dp(18))
+                                            val tt = tv(txt, 11f, fMed, P.text)
+                                            tt.maxLines = 6
+                                            tt.setPadding(dp(6), dp(6), dp(6), dp(18))
                                             box.addView(tt)
                                         }
                                         val likedBy = p.child("likedBy").children.map { it.key }.toSet()
                                         val heartQuick = icon(R.drawable.ic_heart_outline, P.textSec, dp(18))
-                                        val hp = FrameLayout.LayoutParams(dp(18), dp(18)); hp.gravity = Gravity.TOP or Gravity.END
+                                        val hp = FrameLayout.LayoutParams(dp(18), dp(18))
+                                        hp.gravity = Gravity.TOP or Gravity.END
                                         hp.setMargins(0, dp(6), dp(6), 0)
                                         box.addView(heartQuick, hp)
                                         val cntHidden = tv("♥ $lc", 12f, fSemi, P.text)
                                         attachLike(heartQuick, cntHidden, heartQuick, postId, currentUserId in likedBy)
-                                    } catch (e: Exception) {}
+                                    } catch (e: Exception) {
+                                        // пропускаем ячейку
+                                    }
                                 }
                                 row.addView(box)
                             }
-                            profilePostsGrid.addView(row); i += 3
+                            profilePostsGrid.addView(row)
+                            i += 3
                         }
                     }
                     override fun onCancelled(error: DatabaseError) {}
@@ -1416,37 +1779,54 @@ class MainActivity : Activity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (resultCode != RESULT_OK || data == null) return
+
         if (requestCode == PICK_IMAGES) {
-            val uris = ArrayList<android.net.Uri>(); val clip = data.clipData
-            if (clip != null) for (k in 0 until clip.itemCount) uris.add(clip.getItemAt(k).uri) else data.data?.let { uris.add(it) }
+            val uris = ArrayList<android.net.Uri>()
+            val clip = data.clipData
+            if (clip != null) {
+                for (k in 0 until clip.itemCount) uris.add(clip.getItemAt(k).uri)
+            } else {
+                data.data?.let { uris.add(it) }
+            }
             if (uris.isEmpty()) return
             pendingImages.clear()
             for (u in uris) {
                 if (pendingImages.size >= 4) break
                 try {
                     val ins = contentResolver.openInputStream(u)
-                    val bounds = BitmapFactory.Options(); bounds.inJustDecodeBounds = true
-                    BitmapFactory.decodeStream(ins, null, bounds); ins?.close()
+                    val bounds = BitmapFactory.Options()
+                    bounds.inJustDecodeBounds = true
+                    BitmapFactory.decodeStream(ins, null, bounds)
+                    ins?.close()
                     var sample = 1
                     while (bounds.outWidth / sample / 2 > 720) sample *= 2
                     val ins2 = contentResolver.openInputStream(u)
-                    val opts = BitmapFactory.Options(); opts.inSampleSize = sample
-                    val bmp = BitmapFactory.decodeStream(ins2, null, opts); ins2?.close()
+                    val opts = BitmapFactory.Options()
+                    opts.inSampleSize = sample
+                    val bmp = BitmapFactory.decodeStream(ins2, null, opts)
+                    ins2?.close()
                     if (bmp != null) {
-                        val baos = ByteArrayOutputStream(); bmp.compress(Bitmap.CompressFormat.JPEG, 70, baos)
+                        val baos = ByteArrayOutputStream()
+                        bmp.compress(Bitmap.CompressFormat.JPEG, 70, baos)
                         pendingImages.add(Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP))
                     }
-                } catch (e: Exception) {}
+                } catch (e: Exception) {
+                    // пропускаем битое фото
+                }
             }
             if (pendingImages.isNotEmpty()) {
-                pendingWrap.visibility = View.VISIBLE; pendingInfo.text = "выбрано фото: ${pendingImages.size}"
+                pendingWrap.visibility = View.VISIBLE
+                pendingInfo.text = "выбрано фото: ${pendingImages.size}"
                 pendingRow.removeAllViews()
                 for (im in pendingImages) {
                     val b = decodeScaled(im, dp(84))
                     if (b != null) {
-                        val iv = ImageView(this); iv.setImageBitmap(b); iv.scaleType = ImageView.ScaleType.CENTER_CROP
+                        val iv = ImageView(this)
+                        iv.setImageBitmap(b)
+                        iv.scaleType = ImageView.ScaleType.CENTER_CROP
                         iv.layoutParams = lp(dp(84), dp(84), dp(6))
-                        iv.background = surf(12, filled = true); iv.clipToOutline = true
+                        iv.background = surf(12, filled = true)
+                        iv.clipToOutline = true
                         pendingRow.addView(iv)
                     }
                 }
@@ -1455,18 +1835,23 @@ class MainActivity : Activity() {
             val uri = data.data ?: return
             try {
                 val ins = contentResolver.openInputStream(uri)
-                val bounds = BitmapFactory.Options(); bounds.inJustDecodeBounds = true
-                BitmapFactory.decodeStream(ins, null, bounds); ins?.close()
+                val bounds = BitmapFactory.Options()
+                bounds.inJustDecodeBounds = true
+                BitmapFactory.decodeStream(ins, null, bounds)
+                ins?.close()
                 var sample = 1
                 while (bounds.outWidth / sample / 2 > 400) sample *= 2
                 val ins2 = contentResolver.openInputStream(uri)
-                val opts = BitmapFactory.Options(); opts.inSampleSize = sample
-                val bmp = BitmapFactory.decodeStream(ins2, null, opts); ins2?.close()
+                val opts = BitmapFactory.Options()
+                opts.inSampleSize = sample
+                val bmp = BitmapFactory.decodeStream(ins2, null, opts)
+                ins2?.close()
                 if (bmp != null) {
-                    val s = minOf(bmp.width, bmp.height)
-                    val cropped = Bitmap.createBitmap(bmp, (bmp.width - s) / 2, (bmp.height - s) / 2, s, s)
+                    val side = minOf(bmp.width, bmp.height)
+                    val cropped = Bitmap.createBitmap(bmp, (bmp.width - side) / 2, (bmp.height - side) / 2, side, side)
                     val scaled = Bitmap.createScaledBitmap(cropped, 240, 240, true)
-                    val baos = ByteArrayOutputStream(); scaled.compress(Bitmap.CompressFormat.JPEG, 75, baos)
+                    val baos = ByteArrayOutputStream()
+                    scaled.compress(Bitmap.CompressFormat.JPEG, 75, baos)
                     val avatarB64 = Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)
                     database.child("users").child(currentUserId).child("avatar").setValue(avatarB64)
                     currentAvatar = avatarB64
@@ -1474,7 +1859,9 @@ class MainActivity : Activity() {
                     profileAvatar.setImageBitmap(makeCircularBitmap(scaled, dp(84)))
                     editAvatarView?.setImageBitmap(makeCircularBitmap(scaled, dp(96)))
                 }
-            } catch (e: Exception) {}
+            } catch (e: Exception) {
+                // не падаем при ошибке чтения аватара
+            }
         }
     }
 }
