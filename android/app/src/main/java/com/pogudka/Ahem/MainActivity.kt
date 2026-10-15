@@ -1,19 +1,11 @@
 package com.pogudka.Ahem
 
 import android.app.Activity
-import android.content.Intent
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.os.Bundle
-import android.provider.MediaStore
-import android.util.Base64
 import android.view.View
 import android.widget.*
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.database.*
-import java.io.ByteArrayOutputStream
-import java.text.SimpleDateFormat
-import java.util.*
 
 class MainActivity : Activity() {
     
@@ -50,9 +42,6 @@ class MainActivity : Activity() {
     private lateinit var msgField: EditText
     private var currentChat = ""
     
-    private val PICK_IMAGE = 1001
-    private var photoTarget = "chat"
-    
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
     private fun lp(w: Int, h: Int, margin: Int = 0): LinearLayout.LayoutParams {
         val p = LinearLayout.LayoutParams(w, h)
@@ -83,7 +72,7 @@ class MainActivity : Activity() {
         tabs = arrayOf(feedTab, chatTab)
         for (t in tabs) content.addView(t, FrameLayout.LayoutParams(-1, -1))
         
-        val titles = arrayOf("📰 Лента", "💬 Чаты")
+        val titles = arrayOf(" Лента", "💬 Чаты")
         tabBtns = Array(2) { i ->
             val b = Button(this)
             b.text = titles[i]
@@ -106,14 +95,15 @@ class MainActivity : Activity() {
         val user = auth.currentUser
         if (user != null) {
             currentUserId = user.uid
-            // Загружаем ник из базы
             database.child("users").child(currentUserId).child("nick")
                 .addListenerForSingleValueEvent(object : ValueEventListener {
                     override fun onDataChange(snapshot: DataSnapshot) {
                         currentNick = snapshot.getValue(String::class.java) ?: "Аноним"
                         enterFeedMode()
                     }
-                    override fun onCancelled(error: DatabaseError) {}
+                    override fun onCancelled(error: DatabaseError) {
+                        feedStatus.text = "Ошибка загрузки: ${error.message}"
+                    }
                 })
         }
     }
@@ -145,11 +135,11 @@ class MainActivity : Activity() {
         feedPass.inputType = 1
         
         val regBtn = Button(this)
-        regBtn.text = "Регистрация"
+        regBtn.text = "РЕГИСТРАЦИЯ"
         regBtn.layoutParams = lp(-1, LinearLayout.LayoutParams.WRAP_CONTENT, 8)
         
         val logBtn = Button(this)
-        logBtn.text = "Вход"
+        logBtn.text = "ВХОД"
         logBtn.layoutParams = lp(-1, LinearLayout.LayoutParams.WRAP_CONTENT, 8)
         
         feedStatus = TextView(this)
@@ -217,7 +207,6 @@ class MainActivity : Activity() {
                 .addOnCompleteListener { task ->
                     if (task.isSuccessful) {
                         val userId = auth.currentUser?.uid ?: return@addOnCompleteListener
-                        // Сохраняем ник в базе
                         database.child("users").child(userId).child("email").setValue(email)
                         database.child("users").child(userId).child("nick").setValue(nick)
                         currentUserId = userId
@@ -248,7 +237,9 @@ class MainActivity : Activity() {
                                     currentNick = snapshot.getValue(String::class.java) ?: "Аноним"
                                     enterFeedMode()
                                 }
-                                override fun onCancelled(error: DatabaseError) {}
+                                override fun onCancelled(error: DatabaseError) {
+                                    feedStatus.text = "Ошибка: ${error.message}"
+                                }
                             })
                     } else {
                         feedStatus.text = "Ошибка: ${task.exception?.message}"
@@ -299,12 +290,11 @@ class MainActivity : Activity() {
                 override fun onDataChange(snapshot: DataSnapshot) {
                     val posts = ArrayList<DataSnapshot>()
                     for (child in snapshot.children) posts.add(child)
-                    // Новые сверху
                     for (post in posts.reversed()) {
                         val authorNick = post.child("authorNick").getValue(String::class.java) ?: "?"
                         val text = post.child("text").getValue(String::class.java) ?: ""
                         val ts = post.child("timestamp").getValue(Long::class.java) ?: 0
-                        val timeStr = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(ts))
+                        val timeStr = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date(ts))
                         
                         val card = LinearLayout(this@MainActivity)
                         card.orientation = LinearLayout.VERTICAL
@@ -331,7 +321,9 @@ class MainActivity : Activity() {
                         feedBox.addView(tv)
                     }
                 }
-                override fun onCancelled(error: DatabaseError) {}
+                override fun onCancelled(error: DatabaseError) {
+                    Toast.makeText(this@MainActivity, "Ошибка: ${error.message}", Toast.LENGTH_SHORT).show()
+                }
             })
     }
     
