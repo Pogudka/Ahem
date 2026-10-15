@@ -2,12 +2,11 @@ name: Android Build
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches: ["main", "master"]
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -18,21 +17,15 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Generate Wrapper and Build APK
+      - name: Build APK
         run: |
           cd android
           gradle wrapper --gradle-version 8.7
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon
 
-      - name: Debug: Find APK
-        run: |
-          echo "Ищем скомпилированный APK..."
-          find . -name "*.apk" -type f
-
-      - name: Upload APK Artifact
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: Ahem-Debug-APK
           path: android/app/build/outputs/apk/debug/*.apk
-          if-no-files-found: error
