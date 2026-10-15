@@ -134,7 +134,7 @@ class MainActivity : Activity() {
                 override fun doTransaction(mutableData: MutableData): Transaction.Result {
                     val likes = (mutableData.child("likes").value as? Number)?.toInt() ?: 0
                     val likedBy = mutableData.child("likedBy")
-                    val has = likedBy.child(currentUserId).exists()
+                    val has = likedBy.child(currentUserId).value != null
                     if (has) {
                         likedBy.child(currentUserId).value = null
                         mutableData.child("likes").value = maxOf(0, likes - 1)
