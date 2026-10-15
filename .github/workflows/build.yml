@@ -9,31 +9,30 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Set up JDK 17
-      uses: actions/setup-java@v4
-      with:
-        java-version: '17'
-        distribution: 'temurin'
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
 
-    - name: Generate Wrapper and Build APK
-      run: |
-        cd android
-        gradle wrapper --gradle-version 8.7
-        chmod +x gradlew
-        ./gradlew assembleDebug --no-daemon
+      - name: Generate Wrapper and Build APK
+        run: |
+          cd android
+          gradle wrapper --gradle-version 8.7
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
 
-    - name: Debug: Find APK
-      run: |
-        echo "Ищем скомпилированный APK..."
-        find . -name "*.apk" -type f
+      - name: Debug: Find APK
+        run: |
+          echo "Ищем скомпилированный APK..."
+          find . -name "*.apk" -type f
 
-    - name: Upload APK Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: Ahem-Debug-APK
-        # Используем маску *.apk, чтобы найти файл, даже если имя чуть отличается
-        path: android/app/build/outputs/apk/debug/*.apk
-        if-no-files-found: error
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ahem-Debug-APK
+          path: android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
