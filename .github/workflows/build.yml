@@ -19,15 +19,21 @@ jobs:
         distribution: 'temurin'
 
     - name: Generate Wrapper and Build APK
-      # Эта магия сама создаст gradlew на сервере GitHub, если его нет, и соберет приложение
       run: |
         cd android
         gradle wrapper --gradle-version 8.7
         chmod +x gradlew
         ./gradlew assembleDebug --no-daemon
 
+    - name: Debug: Find APK
+      run: |
+        echo "Ищем скомпилированный APK..."
+        find . -name "*.apk" -type f
+
     - name: Upload APK Artifact
       uses: actions/upload-artifact@v4
       with:
         name: Ahem-Debug-APK
-        path: android/app/build/outputs/apk/debug/app-debug.apk
+        # Используем маску *.apk, чтобы найти файл, даже если имя чуть отличается
+        path: android/app/build/outputs/apk/debug/*.apk
+        if-no-files-found: error
