@@ -1,4 +1,4 @@
-name: Android Build
+name: Android CI
 
 on:
   push:
@@ -25,7 +25,7 @@ jobs:
       run: chmod +x android/gradlew
 
     - name: Build with Gradle
-      run: cd android && ./gradlew assembleDebug
+      run: cd android && ./gradlew assembleDebug --no-daemon
 
     - name: Upload APK Artifact
       uses: actions/upload-artifact@v4
