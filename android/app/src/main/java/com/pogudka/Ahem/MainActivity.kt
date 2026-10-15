@@ -115,7 +115,7 @@ class MainActivity : Activity() {
         tabs = arrayOf(feedTab, videoTab, chatTab, profTab)
         for (t in tabs) content.addView(t, FrameLayout.LayoutParams(-1, -1))
         
-        val titles = arrayOf("📰 Лента", " Видео", "💬 Чаты", " Профиль")
+        val titles = arrayOf(" Лента", "🎬 Видео", " Чаты", "👤 Профиль")
         tabBtns = Array(4) { i ->
             val b = Button(this)
             b.text = titles[i]
@@ -511,12 +511,19 @@ class MainActivity : Activity() {
                     likeBtn.text = "♥"
                     likeBtn.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
                     wt(likeBtn, 1f)
+                    
+                    // Проверяем, лайкнул ли уже этот пользователь
+                    val likedBy = post.child("likedBy").children.map { it.key }.toSet()
+                    val alreadyLiked = currentUserId in likedBy
+                    
                     likeBtn.setOnClickListener {
-                        // Проверяем, лайкал ли уже этот пользователь
-                        val likedBy = post.child("likedBy").children.map { it.key }.toSet()
-                        if (currentUserId in likedBy) {
-                            Toast.makeText(this@MainActivity, "Вы уже лайкнули", Toast.LENGTH_SHORT).show()
+                        if (alreadyLiked) {
+                            // Убираем лайк
+                            val newCount = if (likeCount > 0) likeCount - 1 else 0
+                            database.child("posts").child(postId).child("likes").setValue(newCount)
+                            database.child("posts").child(postId).child("likedBy").child(currentUserId).removeValue()
                         } else {
+                            // Ставим лайк
                             val newCount = likeCount + 1
                             database.child("posts").child(postId).child("likes").setValue(newCount)
                             database.child("posts").child(postId).child("likedBy").child(currentUserId).setValue(true)
@@ -710,7 +717,7 @@ class MainActivity : Activity() {
         wt(searchField, 2f)
         
         val searchBtn = Button(this)
-        searchBtn.text = ""
+        searchBtn.text = "🔍"
         searchBtn.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
         wt(searchBtn, 1f)
         
@@ -870,7 +877,7 @@ class MainActivity : Activity() {
         col.setPadding(16, 16, 16, 16)
         
         val head = TextView(this)
-        head.text = "👤 Профиль и сеть"
+        head.text = " Профиль и сеть"
         head.textSize = 18f
         
         lanInfo = TextView(this)
