@@ -94,6 +94,9 @@ class MainActivity : Activity() {
     private var feedListener: ValueEventListener? = null
     private var authListener: FirebaseAuth.AuthStateListener? = null
     
+    // Кэш аватарок чтобы не грузить каждый раз
+    private val avatarCache = HashMap<String, Bitmap>()
+    
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
     private fun lp(w: Int, h: Int, margin: Int = 0): LinearLayout.LayoutParams {
         val p = LinearLayout.LayoutParams(w, h)
@@ -106,7 +109,7 @@ class MainActivity : Activity() {
     private fun me() = currentNick.ifEmpty { "Аноним" }
     private fun addKnown(n: String) { if (n.isNotEmpty() && n != me()) knownNames.add(n) }
 
-    // Круглая аватарка с нужным размером
+    // Круглая аватарка
     private fun makeCircularBitmap(source: Bitmap, targetSize: Int): Bitmap {
         val scaled = Bitmap.createScaledBitmap(source, targetSize, targetSize, true)
         val bmp = Bitmap.createBitmap(targetSize, targetSize, Bitmap.Config.ARGB_8888)
@@ -140,7 +143,7 @@ class MainActivity : Activity() {
         tabs = arrayOf(feedTab, videoTab, chatTab, profTab)
         for (t in tabs) content.addView(t, FrameLayout.LayoutParams(-1, -1))
         
-        val titles = arrayOf(" Лента", "🎬 Видео", " Чаты", "👤 Профиль")
+        val titles = arrayOf("📰 Лента", "🎬 Видео", "💬 Чаты", "👤 Профиль")
         tabBtns = Array(4) { i ->
             val b = Button(this)
             b.text = titles[i]
@@ -501,6 +504,7 @@ class MainActivity : Activity() {
                     card.layoutParams = lp(-1, LinearLayout.LayoutParams.WRAP_CONTENT, 8)
                     card.setBackgroundColor(0xFFFFFFFF.toInt())
                     card.elevation = 2f
+                    card.tag = postId // Сохраняем ID поста в теге
                     
                     // ШАПКА ПОСТА
                     val header = LinearLayout(this@MainActivity)
@@ -513,27 +517,28 @@ class MainActivity : Activity() {
                     avatarView.layoutParams = lp(avatarSize, avatarSize, 12)
                     avatarView.scaleType = ImageView.ScaleType.FIT_CENTER
                     
-                    // Загружаем актуальную аватарку
-                    database.child("users").child(authorId).child("avatar")
-                        .addListenerForSingleValueEvent(object : ValueEventListener {
-                            override fun onDataChange(avatarSnapshot: DataSnapshot) {
-                                val authorAvatar = avatarSnapshot.getValue(String::class.java) ?: ""
-                                if (authorAvatar.isNotEmpty()) {
-                                    try {
-                                        val bytes = Base64.decode(authorAvatar, Base64.NO_WRAP)
-                                        val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                                        avatarView.setImageBitmap(makeCircularBitmap(bmp, avatarSize))
-                                    } catch (e: Exception) {
-                                        avatarView.setImageBitmap(makeCircularBitmap(createAvatarBitmap(authorNick), avatarSize))
+                    // Загружаем аватарку из кэша или из Firebase
+                    if (avatarCache.containsKey(authorId)) {
+                        avatarView.setImageBitmap(avatarCache[authorId])
+                    } else {
+                        avatarView.setImageBitmap(makeCircularBitmap(createAvatarBitmap(authorNick), avatarSize))
+                        database.child("users").child(authorId).child("avatar")
+                            .addListenerForSingleValueEvent(object : ValueEventListener {
+                                override fun onDataChange(avatarSnapshot: DataSnapshot) {
+                                    val authorAvatar = avatarSnapshot.getValue(String::class.java) ?: ""
+                                    if (authorAvatar.isNotEmpty()) {
+                                        try {
+                                            val bytes = Base64.decode(authorAvatar, Base64.NO_WRAP)
+                                            val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                                            val circular = makeCircularBitmap(bmp, avatarSize)
+                                            avatarCache[authorId] = circular
+                                            avatarView.setImageBitmap(circular)
+                                        } catch (e: Exception) {}
                                     }
-                                } else {
-                                    avatarView.setImageBitmap(makeCircularBitmap(createAvatarBitmap(authorNick), avatarSize))
                                 }
-                            }
-                            override fun onCancelled(error: DatabaseError) {
-                                avatarView.setImageBitmap(makeCircularBitmap(createAvatarBitmap(authorNick), avatarSize))
-                            }
-                        })
+                                override fun onCancelled(error: DatabaseError) {}
+                            })
+                    }
                     
                     avatarView.setOnClickListener { openUserProfile(authorId, authorNick) }
                     
@@ -569,7 +574,6 @@ class MainActivity : Activity() {
                         bt.textSize = 14f
                         bt.setTextColor(0xFF000000.toInt())
                         bt.layoutParams = lp(-1, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
-                        // Делаем ссылки кликабельными
                         Linkify.addLinks(bt, Linkify.WEB_URLS)
                         bt.movementMethod = android.text.method.LinkMovementMethod.getInstance()
                         card.addView(bt)
@@ -676,19 +680,27 @@ class MainActivity : Activity() {
                     likeBtn.text = "♥ $likeCount"
                     likeBtn.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
                     wt(likeBtn, 1f)
+                    likeBtn.tag = postId // Сохраняем ID поста в теге кнопки
                     
                     val likedBy = post.child("likedBy").children.map { it.key }.toSet()
                     val alreadyLiked = currentUserId in likedBy
                     
                     likeBtn.setOnClickListener {
+                        val btn = it as Button
+                        val pid = btn.tag as String
+                        val currentText = btn.text.toString()
+                        val currentLikeCount = currentText.substringAfter("♥ ").trim().toIntOrNull() ?: 0
+                        
                         if (alreadyLiked) {
-                            val newCount = if (likeCount > 0) likeCount - 1 else 0
-                            database.child("posts").child(postId).child("likes").setValue(newCount)
-                            database.child("posts").child(postId).child("likedBy").child(currentUserId).removeValue()
+                            val newCount = if (currentLikeCount > 0) currentLikeCount - 1 else 0
+                            database.child("posts").child(pid).child("likes").setValue(newCount)
+                            database.child("posts").child(pid).child("likedBy").child(currentUserId).removeValue()
+                            btn.text = "♥ $newCount"
                         } else {
-                            val newCount = likeCount + 1
-                            database.child("posts").child(postId).child("likes").setValue(newCount)
-                            database.child("posts").child(postId).child("likedBy").child(currentUserId).setValue(true)
+                            val newCount = currentLikeCount + 1
+                            database.child("posts").child(pid).child("likes").setValue(newCount)
+                            database.child("posts").child(pid).child("likedBy").child(currentUserId).setValue(true)
+                            btn.text = "♥ $newCount"
                         }
                     }
                     row.addView(likeBtn)
@@ -744,7 +756,7 @@ class MainActivity : Activity() {
         bar.setBackgroundColor(0x66000000)
         
         val prevB = Button(this)
-        prevB.text = "◀"
+        prevB.text = ""
         prevB.setTextColor(0xFFFFFFFF.toInt())
         prevB.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
         wt(prevB, 1f)
@@ -879,7 +891,7 @@ class MainActivity : Activity() {
         wt(searchField, 2f)
         
         val searchBtn = Button(this)
-        searchBtn.text = ""
+        searchBtn.text = "🔍"
         searchBtn.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
         wt(searchBtn, 1f)
         
@@ -1307,7 +1319,6 @@ class MainActivity : Activity() {
                                     tv.textSize = 14f
                                     tv.setPadding(12, 12, 12, 8)
                                     tv.setTextColor(0xFF000000.toInt())
-                                    // Ссылки кликабельны
                                     Linkify.addLinks(tv, Linkify.WEB_URLS)
                                     tv.movementMethod = android.text.method.LinkMovementMethod.getInstance()
                                     card.addView(tv)
@@ -1337,19 +1348,27 @@ class MainActivity : Activity() {
                                 val likeBtn = Button(this@MainActivity)
                                 likeBtn.text = "♥ $likeCount"
                                 likeBtn.layoutParams = lp(-1, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
+                                likeBtn.tag = postId
                                 
                                 val likedBy = post.child("likedBy").children.map { it.key }.toSet()
                                 val alreadyLiked = currentUserId in likedBy
                                 
                                 likeBtn.setOnClickListener {
+                                    val btn = it as Button
+                                    val pid = btn.tag as String
+                                    val currentText = btn.text.toString()
+                                    val currentLikeCount = currentText.substringAfter("♥ ").trim().toIntOrNull() ?: 0
+                                    
                                     if (alreadyLiked) {
-                                        val newCount = if (likeCount > 0) likeCount - 1 else 0
-                                        database.child("posts").child(postId).child("likes").setValue(newCount)
-                                        database.child("posts").child(postId).child("likedBy").child(currentUserId).removeValue()
+                                        val newCount = if (currentLikeCount > 0) currentLikeCount - 1 else 0
+                                        database.child("posts").child(pid).child("likes").setValue(newCount)
+                                        database.child("posts").child(pid).child("likedBy").child(currentUserId).removeValue()
+                                        btn.text = "♥ $newCount"
                                     } else {
-                                        val newCount = likeCount + 1
-                                        database.child("posts").child(postId).child("likes").setValue(newCount)
-                                        database.child("posts").child(postId).child("likedBy").child(currentUserId).setValue(true)
+                                        val newCount = currentLikeCount + 1
+                                        database.child("posts").child(pid).child("likes").setValue(newCount)
+                                        database.child("posts").child(pid).child("likedBy").child(currentUserId).setValue(true)
+                                        btn.text = "♥ $newCount"
                                     }
                                 }
                                 card.addView(likeBtn)
