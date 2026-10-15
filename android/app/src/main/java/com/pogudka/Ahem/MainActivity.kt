@@ -9,6 +9,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Matrix
+import android.graphics.drawable.BitmapDrawable
 import android.os.Bundle
 import android.provider.MediaStore
 import android.util.Base64
@@ -127,7 +128,7 @@ class MainActivity : Activity() {
         tabs = arrayOf(feedTab, videoTab, chatTab, profTab)
         for (t in tabs) content.addView(t, FrameLayout.LayoutParams(-1, -1))
         
-        val titles = arrayOf("📰 Лента", "🎬 Видео", "💬 Чаты", "👤 Профиль")
+        val titles = arrayOf(" Лента", "🎬 Видео", " Чаты", "👤 Профиль")
         tabBtns = Array(4) { i ->
             val b = Button(this)
             b.text = titles[i]
@@ -294,7 +295,7 @@ class MainActivity : Activity() {
         wt(pubBtn, 2f)
         
         val phBtn = Button(this)
-        phBtn.text = "📷 несколько"
+        phBtn.text = " несколько"
         phBtn.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
         wt(phBtn, 1f)
         
@@ -305,7 +306,7 @@ class MainActivity : Activity() {
         rowAct.orientation = LinearLayout.HORIZONTAL
         
         val feedBtn = Button(this)
-        feedBtn.text = "⟳ Лента"
+        feedBtn.text = " Лента"
         feedBtn.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
         wt(feedBtn, 1f)
         
@@ -488,21 +489,27 @@ class MainActivity : Activity() {
                     card.orientation = LinearLayout.VERTICAL
                     card.setPadding(0, 0, 0, 12)
                     card.layoutParams = lp(-1, LinearLayout.LayoutParams.WRAP_CONTENT, 8)
+                    card.setBackgroundColor(0xFFFFFFFF.toInt())
+                    card.elevation = 2f
                     
                     // ШАПКА ПОСТА
                     val header = LinearLayout(this@MainActivity)
                     header.orientation = LinearLayout.HORIZONTAL
-                    header.setPadding(8, 8, 8, 8)
+                    header.setPadding(12, 12, 12, 12)
                     header.gravity = Gravity.CENTER_VERTICAL
                     
                     val avatarView = ImageView(this@MainActivity)
-                    avatarView.layoutParams = lp(dp(40), dp(40), 8)
+                    avatarView.layoutParams = lp(dp(40), dp(40), 12)
                     avatarView.scaleType = ImageView.ScaleType.CENTER_CROP
+                    // Делаем аватарку круглой
+                    avatarView.clipToOutline = true
+                    avatarView.setBackgroundResource(android.R.drawable.picture_frame)
                     
                     if (authorAvatar.isNotEmpty()) {
                         try {
                             val bytes = Base64.decode(authorAvatar, Base64.NO_WRAP)
-                            avatarView.setImageBitmap(BitmapFactory.decodeByteArray(bytes, 0, bytes.size))
+                            val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                            avatarView.setImageBitmap(bmp)
                         } catch (e: Exception) {
                             avatarView.setImageBitmap(createAvatarBitmap(authorNick))
                         }
@@ -512,32 +519,38 @@ class MainActivity : Activity() {
                     
                     avatarView.setOnClickListener { openUserProfile(authorId, authorNick) }
                     
+                    val nickTimeLayout = LinearLayout(this@MainActivity)
+                    nickTimeLayout.orientation = LinearLayout.VERTICAL
+                    val nickParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT)
+                    nickParams.weight = 1f
+                    nickTimeLayout.layoutParams = nickParams
+                    
                     val nickView = TextView(this@MainActivity)
                     nickView.text = authorNick
                     nickView.textSize = 15f
-                    val nickParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT)
-                    nickParams.weight = 1f
-                    nickView.layoutParams = nickParams
+                    nickView.setTextColor(0xFF000000.toInt())
                     nickView.setOnClickListener { openUserProfile(authorId, authorNick) }
                     
                     val timeView = TextView(this@MainActivity)
                     timeView.text = timeStr
                     timeView.textSize = 12f
                     timeView.setTextColor(0xFF888888.toInt())
-                    timeView.layoutParams = lp(-2, -2, 0)
+                    
+                    nickTimeLayout.addView(nickView)
+                    nickTimeLayout.addView(timeView)
                     
                     header.addView(avatarView)
-                    header.addView(nickView)
-                    header.addView(timeView)
+                    header.addView(nickTimeLayout)
                     card.addView(header)
                     
-                    // ТЕКСТ
+                    // ТЕКСТ ПОСТА
                     if (text.isNotEmpty()) {
                         val bt = TextView(this@MainActivity)
                         bt.text = text
-                        bt.setPadding(8, 0, 8, 8)
+                        bt.setPadding(12, 0, 12, 12)
                         bt.textSize = 14f
-                        bt.layoutParams = lp(-1, LinearLayout.LayoutParams.WRAP_CONTENT, 4)
+                        bt.setTextColor(0xFF000000.toInt())
+                        bt.layoutParams = lp(-1, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
                         card.addView(bt)
                     }
                     
@@ -551,7 +564,7 @@ class MainActivity : Activity() {
                                 val bytes = Base64.decode(images[0], Base64.NO_WRAP)
                                 val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                                 val box = FrameLayout(this@MainActivity)
-                                box.layoutParams = lp(-1, dp(220), 0)
+                                box.layoutParams = lp(-1, dp(250), 0)
                                 box.setBackgroundColor(0xFFFAFAFA.toInt())
                                 val iv = ImageView(this@MainActivity)
                                 iv.setImageBitmap(bmp)
@@ -570,7 +583,7 @@ class MainActivity : Activity() {
                                     val bytes = Base64.decode(images[i], Base64.NO_WRAP)
                                     val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                                     val box = FrameLayout(this@MainActivity)
-                                    box.layoutParams = lp(0, dp(160), 2)
+                                    box.layoutParams = lp(0, dp(180), 2)
                                     wt(box, 1f)
                                     box.setBackgroundColor(0xFFFAFAFA.toInt())
                                     val iv = ImageView(this@MainActivity)
@@ -600,7 +613,7 @@ class MainActivity : Activity() {
                                             val bytes = Base64.decode(images[imgIdx], Base64.NO_WRAP)
                                             val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                                             val box = FrameLayout(this@MainActivity)
-                                            box.layoutParams = lp(0, dp(160), 2)
+                                            box.layoutParams = lp(0, dp(180), 2)
                                             wt(box, 1f)
                                             box.setBackgroundColor(0xFFFAFAFA.toInt())
                                             val iv = ImageView(this@MainActivity)
@@ -613,14 +626,14 @@ class MainActivity : Activity() {
                                             row.addView(box)
                                         } catch (e: Exception) {
                                             val box = FrameLayout(this@MainActivity)
-                                            box.layoutParams = lp(0, dp(160), 2)
+                                            box.layoutParams = lp(0, dp(180), 2)
                                             wt(box, 1f)
                                             box.setBackgroundColor(0xFFFAFAFA.toInt())
                                             row.addView(box)
                                         }
                                     } else {
                                         val box = FrameLayout(this@MainActivity)
-                                        box.layoutParams = lp(0, dp(160), 2)
+                                        box.layoutParams = lp(0, dp(180), 2)
                                         wt(box, 1f)
                                         box.setBackgroundColor(0xFFFAFAFA.toInt())
                                         row.addView(box)
@@ -636,7 +649,7 @@ class MainActivity : Activity() {
                     // КНОПКИ
                     val row = LinearLayout(this@MainActivity)
                     row.orientation = LinearLayout.HORIZONTAL
-                    row.setPadding(8, 4, 8, 4)
+                    row.setPadding(12, 8, 12, 8)
                     
                     val likeBtn = Button(this@MainActivity)
                     likeBtn.text = "♥ $likeCount"
@@ -993,7 +1006,7 @@ class MainActivity : Activity() {
         col.setPadding(16, 16, 16, 16)
         
         val tv = TextView(this)
-        tv.text = "🎬 Видео\n\nЗдесь появится лента клипов.\nСкоро."
+        tv.text = " Видео\n\nЗдесь появится лента клипов.\nСкоро."
         col.addView(tv)
         return col
     }
@@ -1013,6 +1026,8 @@ class MainActivity : Activity() {
         profileAvatar = ImageView(this)
         profileAvatar.layoutParams = lp(dp(100), dp(100), 16)
         profileAvatar.scaleType = ImageView.ScaleType.CENTER_CROP
+        profileAvatar.clipToOutline = true
+        profileAvatar.setBackgroundResource(android.R.drawable.picture_frame)
         
         profileNick = TextView(this)
         profileNick.textSize = 20f
@@ -1094,32 +1109,83 @@ class MainActivity : Activity() {
     private fun showEditProfileDialog() {
         if (viewingUserId != currentUserId) return
         
-        val dlg = Dialog(this)
-        dlg.setTitle("Редактировать профиль")
-        
+        // Создаем полноэкранное окно для редактирования
+        val dlg = Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen)
         val layout = LinearLayout(this)
         layout.orientation = LinearLayout.VERTICAL
+        layout.setBackgroundColor(0xFFFFFFFF.toInt())
         layout.setPadding(32, 16, 32, 16)
         
-        val avatarBtn = Button(this)
-        avatarBtn.text = "📷 Сменить аватар"
-        avatarBtn.layoutParams = lp(-1, LinearLayout.LayoutParams.WRAP_CONTENT, 16)
+        // Заголовок
+        val headerLayout = LinearLayout(this)
+        headerLayout.orientation = LinearLayout.HORIZONTAL
+        headerLayout.gravity = Gravity.CENTER_VERTICAL
         
-        val bioEdit = EditText(this)
-        bioEdit.hint = "Био"
-        bioEdit.setText(profileBio.text.toString())
-        bioEdit.layoutParams = lp(-1, LinearLayout.LayoutParams.WRAP_CONTENT, 16)
+        val backBtn = Button(this)
+        backBtn.text = "←"
+        backBtn.textSize = 24f
+        backBtn.layoutParams = lp(-2, -2, 16)
+        backBtn.setOnClickListener { dlg.dismiss() }
         
+        val title = TextView(this)
+        title.text = "Редактировать профиль"
+        title.textSize = 20f
+        title.layoutParams = lp(0, -2, 0)
+        wt(title, 1f)
+        
+        headerLayout.addView(backBtn)
+        headerLayout.addView(title)
+        
+        // Аватар
+        val avatarLayout = LinearLayout(this)
+        avatarLayout.orientation = LinearLayout.VERTICAL
+        avatarLayout.gravity = Gravity.CENTER_HORIZONTAL
+        avatarLayout.layoutParams = lp(-1, -2, 32)
+        
+        val avatarEdit = ImageView(this)
+        avatarEdit.layoutParams = lp(dp(120), dp(120), 16)
+        avatarEdit.scaleType = ImageView.ScaleType.CENTER_CROP
+        avatarEdit.clipToOutline = true
+        avatarEdit.setBackgroundResource(android.R.drawable.picture_frame)
+        
+        if (currentAvatar.isNotEmpty()) {
+            try {
+                val bytes = Base64.decode(currentAvatar, Base64.NO_WRAP)
+                avatarEdit.setImageBitmap(BitmapFactory.decodeByteArray(bytes, 0, bytes.size))
+            } catch (e: Exception) {
+                avatarEdit.setImageBitmap(createAvatarBitmap(currentNick))
+            }
+        } else {
+            avatarEdit.setImageBitmap(createAvatarBitmap(currentNick))
+        }
+        
+        val changeAvatarBtn = Button(this)
+        changeAvatarBtn.text = "📷 Сменить аватар"
+        changeAvatarBtn.layoutParams = lp(-1, -2, 0)
+        
+        avatarLayout.addView(avatarEdit)
+        avatarLayout.addView(changeAvatarBtn)
+        
+        // Ник
         val nickEdit = EditText(this)
         nickEdit.hint = "Ник"
         nickEdit.setText(currentNick)
-        nickEdit.layoutParams = lp(-1, LinearLayout.LayoutParams.WRAP_CONTENT, 16)
+        nickEdit.layoutParams = lp(-1, -2, 16)
         
+        // Био
+        val bioEdit = EditText(this)
+        bioEdit.hint = "Био"
+        bioEdit.setText(profileBio.text.toString())
+        bioEdit.layoutParams = lp(-1, -2, 16)
+        bioEdit.gravity = Gravity.TOP
+        bioEdit.minLines = 3
+        
+        // Кнопка сохранить
         val saveBtn = Button(this)
         saveBtn.text = "Сохранить"
-        saveBtn.layoutParams = lp(-1, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
+        saveBtn.layoutParams = lp(-1, -2, 0)
         
-        avatarBtn.setOnClickListener {
+        changeAvatarBtn.setOnClickListener {
             val intent = Intent(Intent.ACTION_PICK, MediaStore.Images.Media.EXTERNAL_CONTENT_URI)
             startActivityForResult(intent, PICK_AVATAR)
         }
@@ -1136,10 +1202,12 @@ class MainActivity : Activity() {
             refreshProfile()
         }
         
-        layout.addView(avatarBtn)
+        layout.addView(headerLayout)
+        layout.addView(avatarLayout)
         layout.addView(nickEdit)
         layout.addView(bioEdit)
         layout.addView(saveBtn)
+        
         dlg.setContentView(layout)
         dlg.show()
     }
@@ -1159,7 +1227,8 @@ class MainActivity : Activity() {
                 if (avatar.isNotEmpty()) {
                     try {
                         val bytes = Base64.decode(avatar, Base64.NO_WRAP)
-                        profileAvatar.setImageBitmap(BitmapFactory.decodeByteArray(bytes, 0, bytes.size))
+                        val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                        profileAvatar.setImageBitmap(bmp)
                     } catch (e: Exception) {
                         profileAvatar.setImageBitmap(createAvatarBitmap(nick))
                     }
@@ -1211,6 +1280,25 @@ class MainActivity : Activity() {
                                 val text = post.child("text").getValue(String::class.java) ?: ""
                                 val likeCount = post.child("likes").getValue(Int::class.java) ?: 0
                                 
+                                // Создаем карточку поста
+                                val card = LinearLayout(this@MainActivity)
+                                card.orientation = LinearLayout.VERTICAL
+                                card.setPadding(0, 0, 0, 8)
+                                card.layoutParams = lp(-1, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
+                                card.setBackgroundColor(0xFFFFFFFF.toInt())
+                                card.elevation = 2f
+                                
+                                // Показываем текст если есть
+                                if (text.isNotEmpty()) {
+                                    val tv = TextView(this@MainActivity)
+                                    tv.text = text
+                                    tv.textSize = 14f
+                                    tv.setPadding(12, 12, 12, 8)
+                                    tv.setTextColor(0xFF000000.toInt())
+                                    card.addView(tv)
+                                }
+                                
+                                // Показываем фото если есть
                                 if (imagesStr.isNotEmpty()) {
                                     val images = imagesStr.split(",").filter { it.isNotEmpty() }
                                     if (images.isNotEmpty()) {
@@ -1218,7 +1306,7 @@ class MainActivity : Activity() {
                                             val bytes = Base64.decode(images[0], Base64.NO_WRAP)
                                             val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                                             val box = FrameLayout(this@MainActivity)
-                                            box.layoutParams = lp(-1, dp(180), 8)
+                                            box.layoutParams = lp(-1, dp(200), 0)
                                             box.setBackgroundColor(0xFFFAFAFA.toInt())
                                             val iv = ImageView(this@MainActivity)
                                             iv.setImageBitmap(bmp)
@@ -1236,30 +1324,21 @@ class MainActivity : Activity() {
                                             val olp = FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT)
                                             olp.gravity = Gravity.BOTTOM or Gravity.START
                                             box.addView(overlay, olp)
-                                            profilePostsGrid.addView(box)
+                                            
+                                            card.addView(box)
                                         } catch (e: Exception) {}
                                     }
-                                } else if (text.isNotEmpty()) {
-                                    val card = LinearLayout(this@MainActivity)
-                                    card.orientation = LinearLayout.VERTICAL
-                                    card.setPadding(8, 8, 8, 8)
-                                    card.layoutParams = lp(-1, LinearLayout.LayoutParams.WRAP_CONTENT, 8)
-                                    card.setBackgroundColor(0xFFEEEEEE.toInt())
-                                    
-                                    val tv = TextView(this@MainActivity)
-                                    tv.text = text
-                                    tv.textSize = 14f
-                                    tv.setPadding(4, 4, 4, 4)
-                                    
+                                } else {
+                                    // Если нет фото, показываем лайки под текстом
                                     val likeTv = TextView(this@MainActivity)
                                     likeTv.text = "♥ $likeCount"
                                     likeTv.textSize = 12f
-                                    likeTv.setPadding(4, 0, 4, 4)
-                                    
-                                    card.addView(tv)
+                                    likeTv.setPadding(12, 0, 12, 12)
+                                    likeTv.setTextColor(0xFF888888.toInt())
                                     card.addView(likeTv)
-                                    profilePostsGrid.addView(card)
                                 }
+                                
+                                profilePostsGrid.addView(card)
                             }
                         }
                         override fun onCancelled(error: DatabaseError) {}
@@ -1342,7 +1421,10 @@ class MainActivity : Activity() {
                 val ins = contentResolver.openInputStream(uri)
                 val bmp = BitmapFactory.decodeStream(ins)
                 ins?.close()
-                val scaled = Bitmap.createScaledBitmap(bmp, 200, 200, true)
+                // Обрезаем в квадрат без потери пропорций
+                val size = minOf(bmp.width, bmp.height)
+                val cropped = Bitmap.createBitmap(bmp, (bmp.width - size) / 2, (bmp.height - size) / 2, size, size)
+                val scaled = Bitmap.createScaledBitmap(cropped, 200, 200, true)
                 val baos = ByteArrayOutputStream()
                 scaled.compress(Bitmap.CompressFormat.JPEG, 70, baos)
                 val avatarB64 = Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)
