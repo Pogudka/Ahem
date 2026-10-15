@@ -111,6 +111,8 @@ class MainActivity : Activity() {
     }
     private fun me() = currentNick.ifEmpty { "Аноним" }
     private fun addKnown(n: String) { if (n.isNotEmpty() && n != me()) knownNames.add(n) }
+    private fun parseCount(btn: Button): Int =
+        btn.text.toString().substringAfter("♥").trim().toIntOrNull() ?: 0
 
     // Круглая аватарка: центр-кроп в квадрат -> масштаб -> круг с отступом 1px
     private fun makeCircularBitmap(source: Bitmap, targetSize: Int): Bitmap {
@@ -125,17 +127,22 @@ class MainActivity : Activity() {
         return out
     }
     
-    // Лайк через транзакцию: 1 лайк на пользователя, переключение без багов
-    private fun attachLike(btn: Button, postId: String) {
+    // Лайк: мгновенное переключение кнопки + транзакция на сервере (1 лайк на пользователя)
+    private fun attachLike(btn: Button, postId: String, initialLiked: Boolean) {
+        val liked = booleanArrayOf(initialLiked)
         btn.setOnClickListener {
             if (currentUserId.isEmpty()) return@setOnClickListener
-            val ref = database.child("posts").child(postId)
-            ref.runTransaction(object : Transaction.Handler {
+            val prevLiked = liked[0]
+            val prevCount = parseCount(btn)
+            // Оптимистично переключаем СРАЗУ
+            liked[0] = !prevLiked
+            btn.text = "♥ " + if (liked[0]) prevCount + 1 else maxOf(0, prevCount - 1)
+            
+            database.child("posts").child(postId).runTransaction(object : Transaction.Handler {
                 override fun doTransaction(mutableData: MutableData): Transaction.Result {
                     val likes = (mutableData.child("likes").value as? Number)?.toInt() ?: 0
                     val likedBy = mutableData.child("likedBy")
-                    val has = likedBy.child(currentUserId).value != null
-                    if (has) {
+                    if (likedBy.child(currentUserId).value != null) {
                         likedBy.child(currentUserId).value = null
                         mutableData.child("likes").value = maxOf(0, likes - 1)
                     } else {
@@ -147,11 +154,44 @@ class MainActivity : Activity() {
                 override fun onComplete(error: DatabaseError?, committed: Boolean, data: DataSnapshot?) {
                     if (committed && data != null) {
                         val newCount = (data.child("likes").value as? Number)?.toInt() ?: 0
+                        liked[0] = data.child("likedBy").child(currentUserId).value != null
                         btn.text = "♥ $newCount"
+                    } else {
+                        // Ошибка сети - откатываем как было
+                        liked[0] = prevLiked
+                        btn.text = "♥ $prevCount"
                     }
                 }
             })
         }
+    }
+    
+    // Обновляем ник во всех постах пользователя
+    private fun updatePostsNick(newNick: String) {
+        database.child("posts").orderByChild("authorId").equalTo(currentUserId)
+            .addListenerForSingleValueEvent(object : ValueEventListener {
+                override fun onDataChange(snapshot: DataSnapshot) {
+                    for (p in snapshot.children) {
+                        p.ref.child("authorNick").setValue(newNick)
+                    }
+                }
+                override fun onCancelled(error: DatabaseError) {}
+            })
+    }
+    
+    // Проверка: ник занят другим пользователем?
+    private fun isNickTaken(nick: String, excludeUid: String, callback: (Boolean) -> Unit) {
+        database.child("users").addListenerForSingleValueEvent(object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                var taken = false
+                for (u in snapshot.children) {
+                    val n = u.child("nick").getValue(String::class.java) ?: ""
+                    if (n.equals(nick, ignoreCase = true) && u.key != excludeUid) { taken = true; break }
+                }
+                callback(taken)
+            }
+            override fun onCancelled(error: DatabaseError) { callback(false) }
+        })
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -255,7 +295,7 @@ class MainActivity : Activity() {
         feedEmail.hint = "Email"
         
         feedNick = EditText(this)
-        feedNick.hint = "Ник"
+        feedNick.hint = "Ник (мин. 5 символов, уникальный)"
         
         feedPass = EditText(this)
         feedPass.hint = "Пароль"
@@ -392,32 +432,45 @@ class MainActivity : Activity() {
         
         regBtn.setOnClickListener {
             if (isRegistering) return@setOnClickListener
-            val email = feedEmail.text.toString()
-            val nick = feedNick.text.toString()
+            val email = feedEmail.text.toString().trim()
+            val nick = feedNick.text.toString().trim()
             val pass = feedPass.text.toString()
             if (email.isEmpty() || nick.isEmpty() || pass.isEmpty()) { 
                 feedStatus.text = "Заполни все поля"
                 return@setOnClickListener 
             }
+            if (nick.length < 5) {
+                feedStatus.text = "Ник минимум 5 символов"
+                return@setOnClickListener
+            }
             isRegistering = true
             regBtn.isEnabled = false
             regBtn.text = "..."
-            auth.createUserWithEmailAndPassword(email, pass).addOnCompleteListener { task ->
-                if (task.isSuccessful) {
-                    val userId = auth.currentUser?.uid ?: return@addOnCompleteListener
-                    database.child("users").child(userId).child("email").setValue(email)
-                    database.child("users").child(userId).child("nick").setValue(nick)
-                    currentUserId = userId
-                    currentNick = nick
-                    viewingUserId = currentUserId
-                    feedStatus.text = "Зарегистрирован!"
-                    enterFeedMode()
-                } else { 
-                    feedStatus.text = "Ошибка: ${task.exception?.message}" 
+            isNickTaken(nick, "") { taken ->
+                if (taken) {
+                    feedStatus.text = "Ник уже занят"
+                    isRegistering = false
+                    regBtn.isEnabled = true
+                    regBtn.text = "Регистрация"
+                    return@isNickTaken
                 }
-                isRegistering = false
-                regBtn.isEnabled = true
-                regBtn.text = "Регистрация"
+                auth.createUserWithEmailAndPassword(email, pass).addOnCompleteListener { task ->
+                    if (task.isSuccessful) {
+                        val userId = auth.currentUser?.uid ?: return@addOnCompleteListener
+                        database.child("users").child(userId).child("email").setValue(email)
+                        database.child("users").child(userId).child("nick").setValue(nick)
+                        currentUserId = userId
+                        currentNick = nick
+                        viewingUserId = currentUserId
+                        feedStatus.text = "Зарегистрирован!"
+                        enterFeedMode()
+                    } else { 
+                        feedStatus.text = "Ошибка: ${task.exception?.message}" 
+                    }
+                    isRegistering = false
+                    regBtn.isEnabled = true
+                    regBtn.text = "Регистрация"
+                }
             }
         }
         
@@ -530,6 +583,7 @@ class MainActivity : Activity() {
                 for (p in posts) {
                     sb.append(p.key).append('~')
                       .append(p.child("timestamp").getValue(Long::class.java) ?: 0).append('~')
+                      .append(p.child("authorNick").getValue(String::class.java) ?: "").append('~')
                       .append(p.child("text").getValue(String::class.java) ?: "").append('~')
                       .append(p.child("images").getValue(String::class.java) ?: "").append(';')
                 }
@@ -730,7 +784,8 @@ class MainActivity : Activity() {
                     likeBtn.text = "♥ $likeCount"
                     likeBtn.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
                     wt(likeBtn, 1f)
-                    attachLike(likeBtn, postId)
+                    val likedBy = post.child("likedBy").children.map { it.key }.toSet()
+                    attachLike(likeBtn, postId, currentUserId in likedBy)
                     row.addView(likeBtn)
                     
                     if (authorId != currentUserId) {
@@ -1225,7 +1280,7 @@ class MainActivity : Activity() {
         avatarLayout.addView(changeAvatarBtn)
         
         val nickEdit = EditText(this)
-        nickEdit.hint = "Ник"
+        nickEdit.hint = "Ник (мин. 5 символов, уникальный)"
         nickEdit.setText(currentNick)
         nickEdit.layoutParams = lp(-1, -2, 16)
         
@@ -1248,14 +1303,28 @@ class MainActivity : Activity() {
         saveBtn.setOnClickListener {
             val newNick = nickEdit.text.toString().trim()
             val newBio = bioEdit.text.toString().trim()
-            if (newNick.isNotEmpty()) {
-                database.child("users").child(currentUserId).child("nick").setValue(newNick)
-                currentNick = newNick
+            if (newNick.length < 5) {
+                Toast.makeText(this, "Ник минимум 5 символов", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
             }
-            database.child("users").child(currentUserId).child("bio").setValue(newBio)
-            dlg.dismiss()
-            refreshProfile()
-            loadFeed()
+            saveBtn.isEnabled = false
+            isNickTaken(newNick, currentUserId) { taken ->
+                saveBtn.isEnabled = true
+                if (taken) {
+                    Toast.makeText(this@MainActivity, "Ник уже занят", Toast.LENGTH_SHORT).show()
+                    return@isNickTaken
+                }
+                if (newNick != currentNick) {
+                    database.child("users").child(currentUserId).child("nick").setValue(newNick)
+                    currentNick = newNick
+                    feedHeader.text = "@$newNick"
+                    updatePostsNick(newNick)
+                }
+                database.child("users").child(currentUserId).child("bio").setValue(newBio)
+                dlg.dismiss()
+                refreshProfile()
+                loadFeed()
+            }
         }
         
         layout.addView(headerLayout)
@@ -1375,11 +1444,12 @@ class MainActivity : Activity() {
                                     }
                                 }
                                 
-                                // Кнопка лайка в профиле (та же транзакция)
+                                // Кнопка лайка в профиле (мгновенная + транзакция)
                                 val likeBtn = Button(this@MainActivity)
                                 likeBtn.text = "♥ $likeCount"
                                 likeBtn.layoutParams = lp(-1, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
-                                attachLike(likeBtn, postId)
+                                val likedBy = post.child("likedBy").children.map { it.key }.toSet()
+                                attachLike(likeBtn, postId, currentUserId in likedBy)
                                 card.addView(likeBtn)
                                 
                                 profilePostsGrid.addView(card)
@@ -1474,7 +1544,6 @@ class MainActivity : Activity() {
                 database.child("users").child(currentUserId).child("avatar").setValue(avatarB64)
                 currentAvatar = avatarB64
                 
-                // Обновляем кэш и все видимые аватарки
                 avatarCache[currentUserId] = makeCircularBitmap(scaled, dp(40))
                 profileAvatar.setImageBitmap(makeCircularBitmap(scaled, dp(100)))
                 editAvatarView?.setImageBitmap(makeCircularBitmap(scaled, dp(120)))
