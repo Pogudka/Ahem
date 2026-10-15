@@ -857,8 +857,8 @@ class MainActivity : Activity() {
                             avatarImg.setImageBitmap(makeCircularBitmap(createAvatarBitmap(authorNick), avatarSize))
                             database.child("users").child(authorId).child("avatar")
                                 .addListenerForSingleValueEvent(object : ValueEventListener {
-                                    override fun onDataChange(as: DataSnapshot) {
-                                        val s = as.getValue(String::class.java) ?: ""
+                                    override fun onDataChange(avatarSnapshot: DataSnapshot) {
+                                        val s = avatarSnapshot.getValue(String::class.java) ?: ""
                                         if (s.isNotEmpty()) {
                                             val b = decodeScaled(s, avatarSize)
                                             if (b != null) {
