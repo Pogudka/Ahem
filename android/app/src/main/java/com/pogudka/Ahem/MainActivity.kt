@@ -44,9 +44,13 @@ class MainActivity : Activity() {
     private lateinit var feedFollowNick: EditText
     private lateinit var feedBox: LinearLayout
     private lateinit var feedScroll: ScrollView
+    private lateinit var regBtn: Button
+    private lateinit var logBtn: Button
     private var currentUserId = ""
     private var currentNick = ""
     private val pendingImages = ArrayList<String>()
+    private var isRegistering = false
+    private var isLoggingIn = false
     
     // ЧАТЫ
     private lateinit var chatListRoot: LinearLayout
@@ -71,6 +75,10 @@ class MainActivity : Activity() {
     private val PICK_IMAGES = 1002
     private var photoTarget = "chat"
     private val ZOOM_MAX = 3f
+    
+    // Слушатели Firebase
+    private var feedListener: ValueEventListener? = null
+    private var authListener: FirebaseAuth.AuthStateListener? = null
     
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
     private fun lp(w: Int, h: Int, margin: Int = 0): LinearLayout.LayoutParams {
@@ -107,7 +115,7 @@ class MainActivity : Activity() {
         tabs = arrayOf(feedTab, videoTab, chatTab, profTab)
         for (t in tabs) content.addView(t, FrameLayout.LayoutParams(-1, -1))
         
-        val titles = arrayOf("📰 Лента", "🎬 Видео", "💬 Чаты", "👤 Профиль")
+        val titles = arrayOf("📰 Лента", " Видео", "💬 Чаты", " Профиль")
         tabBtns = Array(4) { i ->
             val b = Button(this)
             b.text = titles[i]
@@ -122,25 +130,39 @@ class MainActivity : Activity() {
         setContentView(root)
         showTab(0)
         
-        checkAuth()
+        // Слушатель состояния авторизации для автовхода
+        authListener = FirebaseAuth.AuthStateListener { firebaseAuth ->
+            val user = firebaseAuth.currentUser
+            if (user != null && currentUserId.isEmpty()) {
+                currentUserId = user.uid
+                database.child("users").child(currentUserId).child("nick")
+                    .addListenerForSingleValueEvent(object : ValueEventListener {
+                        override fun onDataChange(snapshot: DataSnapshot) {
+                            currentNick = snapshot.getValue(String::class.java) ?: "Аноним"
+                            if (::nameField.isInitialized) nameField.setText(currentNick)
+                            if (::feedBlock.isInitialized && feedBlock.visibility == View.GONE) {
+                                enterFeedMode()
+                            }
+                        }
+                        override fun onCancelled(error: DatabaseError) {}
+                    })
+            } else if (user == null && currentUserId.isNotEmpty()) {
+                currentUserId = ""
+                currentNick = ""
+                if (::feedBlock.isInitialized) {
+                    feedBlock.visibility = View.GONE
+                    authBlock.visibility = View.VISIBLE
+                    feedStatus.text = "не залогинен"
+                }
+            }
+        }
+        auth.addAuthStateListener(authListener!!)
     }
     
-    private fun checkAuth() {
-        val user = auth.currentUser
-        if (user != null) {
-            currentUserId = user.uid
-            database.child("users").child(currentUserId).child("nick")
-                .addListenerForSingleValueEvent(object : ValueEventListener {
-                    override fun onDataChange(snapshot: DataSnapshot) {
-                        currentNick = snapshot.getValue(String::class.java) ?: "Аноним"
-                        nameField.setText(currentNick)
-                        enterFeedMode()
-                    }
-                    override fun onCancelled(error: DatabaseError) {
-                        feedStatus.text = "Ошибка: ${error.message}"
-                    }
-                })
-        }
+    override fun onDestroy() {
+        super.onDestroy()
+        authListener?.let { auth.removeAuthStateListener(it) }
+        feedListener?.let { database.child("posts").removeEventListener(it) }
     }
     
     private fun showTab(i: Int) {
@@ -173,12 +195,12 @@ class MainActivity : Activity() {
         val rowAuth = LinearLayout(this)
         rowAuth.orientation = LinearLayout.HORIZONTAL
         
-        val regBtn = Button(this)
+        regBtn = Button(this)
         regBtn.text = "Регистрация"
         regBtn.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
         wt(regBtn, 1f)
         
-        val logBtn = Button(this)
+        logBtn = Button(this)
         logBtn.text = "Вход"
         logBtn.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
         wt(logBtn, 1f)
@@ -298,6 +320,7 @@ class MainActivity : Activity() {
         feedBlock.addView(feedScroll)
         
         regBtn.setOnClickListener {
+            if (isRegistering) return@setOnClickListener
             val email = feedEmail.text.toString()
             val nick = feedNick.text.toString()
             val pass = feedPass.text.toString()
@@ -305,6 +328,9 @@ class MainActivity : Activity() {
                 feedStatus.text = "Заполни все поля"
                 return@setOnClickListener 
             }
+            isRegistering = true
+            regBtn.isEnabled = false
+            regBtn.text = "..."
             auth.createUserWithEmailAndPassword(email, pass).addOnCompleteListener { task ->
                 if (task.isSuccessful) {
                     val userId = auth.currentUser?.uid ?: return@addOnCompleteListener
@@ -313,20 +339,28 @@ class MainActivity : Activity() {
                     currentUserId = userId
                     currentNick = nick
                     nameField.setText(nick)
+                    feedStatus.text = "Зарегистрирован!"
                     enterFeedMode()
                 } else { 
                     feedStatus.text = "Ошибка: ${task.exception?.message}" 
                 }
+                isRegistering = false
+                regBtn.isEnabled = true
+                regBtn.text = "Регистрация"
             }
         }
         
         logBtn.setOnClickListener {
+            if (isLoggingIn) return@setOnClickListener
             val email = feedEmail.text.toString()
             val pass = feedPass.text.toString()
             if (email.isEmpty() || pass.isEmpty()) { 
                 feedStatus.text = "Email + пароль"
                 return@setOnClickListener 
             }
+            isLoggingIn = true
+            logBtn.isEnabled = false
+            logBtn.text = "..."
             auth.signInWithEmailAndPassword(email, pass).addOnCompleteListener { task ->
                 if (task.isSuccessful) {
                     val userId = auth.currentUser?.uid ?: return@addOnCompleteListener
@@ -342,6 +376,9 @@ class MainActivity : Activity() {
                 } else { 
                     feedStatus.text = "Ошибка: ${task.exception?.message}" 
                 }
+                isLoggingIn = false
+                logBtn.isEnabled = true
+                logBtn.text = "Вход"
             }
         }
         
@@ -377,6 +414,7 @@ class MainActivity : Activity() {
             post["images"] = pendingImages.joinToString(",")
             post["timestamp"] = System.currentTimeMillis()
             post["likes"] = 0
+            post["likedBy"] = HashMap<String, Boolean>()
             database.child("posts").child(postId).setValue(post)
             feedPostText.setText("")
             pendingImages.clear()
@@ -405,9 +443,13 @@ class MainActivity : Activity() {
     }
     
     private fun loadFeed() {
+        // Удаляем старый слушатель если есть
+        feedListener?.let { database.child("posts").removeEventListener(it) }
         feedBox.removeAllViews()
-        database.child("posts").orderByChild("timestamp").addListenerForSingleValueEvent(object : ValueEventListener {
+        
+        feedListener = database.child("posts").orderByChild("timestamp").addValueEventListener(object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
+                feedBox.removeAllViews()
                 val posts = ArrayList<DataSnapshot>()
                 for (child in snapshot.children) posts.add(child)
                 for (post in posts.reversed()) {
@@ -470,9 +512,15 @@ class MainActivity : Activity() {
                     likeBtn.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
                     wt(likeBtn, 1f)
                     likeBtn.setOnClickListener {
-                        val newCount = likeCount + 1
-                        database.child("posts").child(postId).child("likes").setValue(newCount)
-                        Toast.makeText(this@MainActivity, "Лайк поставлен!", Toast.LENGTH_SHORT).show()
+                        // Проверяем, лайкал ли уже этот пользователь
+                        val likedBy = post.child("likedBy").children.map { it.key }.toSet()
+                        if (currentUserId in likedBy) {
+                            Toast.makeText(this@MainActivity, "Вы уже лайкнули", Toast.LENGTH_SHORT).show()
+                        } else {
+                            val newCount = likeCount + 1
+                            database.child("posts").child(postId).child("likes").setValue(newCount)
+                            database.child("posts").child(postId).child("likedBy").child(currentUserId).setValue(true)
+                        }
                     }
                     row.addView(likeBtn)
                     
@@ -662,7 +710,7 @@ class MainActivity : Activity() {
         wt(searchField, 2f)
         
         val searchBtn = Button(this)
-        searchBtn.text = "🔍"
+        searchBtn.text = ""
         searchBtn.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
         wt(searchBtn, 1f)
         
