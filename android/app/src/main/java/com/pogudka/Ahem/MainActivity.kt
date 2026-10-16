@@ -4,16 +4,12 @@ import android.content.Context
 import android.animation.ObjectAnimator
 import android.app.Activity
 import android.graphics.Bitmap
-import android.graphics.Canvas
-import android.graphics.Path
-import android.graphics.RectF
 import android.graphics.Typeface
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
 import android.view.View
-import android.view.ViewTreeObserver
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageView
@@ -40,6 +36,7 @@ class MainActivity : Activity() {
 
     private lateinit var tabs: Array<View>
     private lateinit var navIcons: Array<ImageView>
+    private var glassNav: BlurGlassView? = null
 
     internal lateinit var authBlock: LinearLayout
     internal lateinit var feedBlock: LinearLayout
@@ -202,14 +199,18 @@ class MainActivity : Activity() {
         nwp.setMargins(dp(16), 0, dp(16), dp(12))
         navWrap.layoutParams = nwp
 
-        val glassView = GlassBlurView(this)
-        glassView.layoutParams = FrameLayout.LayoutParams(-1, dp(56))
+        val blurView = BlurGlassView(this)
+        blurView.setRadius(dp(28).toFloat())
+        blurView.setTint(P.navGlass)
+        blurView.setBorder(P.border, dp(1).toFloat())
+        blurView.layoutParams = FrameLayout.LayoutParams(-1, -1)
+        glassNav = blurView
 
         val nav = LinearLayout(this)
         nav.orientation = LinearLayout.HORIZONTAL
         nav.gravity = Gravity.CENTER_VERTICAL
         nav.setPadding(dp(10), dp(8), dp(10), dp(8))
-        nav.layoutParams = FrameLayout.LayoutParams(-1, dp(56))
+        nav.layoutParams = FrameLayout.LayoutParams(-1, -2)
 
         val icons = intArrayOf(R.drawable.ic_feed, R.drawable.ic_video, R.drawable.ic_chat, R.drawable.ic_profile)
         navIcons = Array(4) { i ->
@@ -222,18 +223,19 @@ class MainActivity : Activity() {
         }
         for (iv in navIcons) nav.addView(iv)
 
-        navWrap.addView(glassView)
+        navWrap.addView(blurView)
         navWrap.addView(nav)
         root.addView(content)
         root.addView(navWrap)
         setContentView(root)
-        glassView.target = content
 
         val navSpace = dp(96)
         feedBox.setPadding(0, 0, 0, navSpace)
         profilePostsGrid.setPadding(0, 0, 0, navSpace)
         convBox.setPadding(0, 0, 0, navSpace)
         chatListRows.setPadding(0, 0, 0, navSpace)
+
+        blurView.attach(root, navWrap)
 
         showTab(0)
 
@@ -313,6 +315,7 @@ class MainActivity : Activity() {
     internal fun showTab(i: Int, keep: Boolean = false) {
         for (idx in tabs.indices) tabs[idx].visibility = if (idx == i) View.VISIBLE else View.GONE
         for (idx in 0 until 4) navIcons[idx].setColorFilter(if (idx == i) P.accent else P.navInactive)
+        glassNav?.requestRefresh()
         if (i == 3) {
             if (!keep) {
                 viewingUserId = currentUserId
@@ -327,115 +330,5 @@ class MainActivity : Activity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         handleActivityResult(this, requestCode, resultCode, data)
-    }
-}
-
-internal class GlassBlurView(context: Context) : View(context) {
-
-    var target: View? = null
-    private var bmp: Bitmap? = null
-    private var bmpCanvas: Canvas? = null
-    private var bufA: IntArray? = null
-    private var bufB: IntArray? = null
-    private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
-    private val path = Path()
-    private val rectF = RectF()
-    private val dens = resources.displayMetrics.density
-    private val down = 6
-
-    init {
-        viewTreeObserver.addOnPreDrawListener(object : ViewTreeObserver.OnPreDrawListener {
-            override fun onPreDraw(): Boolean {
-                invalidate()
-                return true
-            }
-        })
-    }
-
-    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
-        super.onSizeChanged(w, h, oldw, oldh)
-        val bw = maxOf(2, w / down)
-        val bh = maxOf(2, h / down)
-        bmp?.recycle()
-        bmp = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888)
-        bmpCanvas = Canvas(bmp!!)
-        bufA = IntArray(bw * bh)
-        bufB = IntArray(bw * bh)
-    }
-
-    override fun onDraw(canvas: Canvas) {
-        val t = target
-        val b = bmp
-        val c = bmpCanvas
-        val a1 = bufA
-        val a2 = bufB
-        if (t == null || b == null || c == null || a1 == null || a2 == null || width == 0 || height == 0) {
-            super.onDraw(canvas)
-            return
-        }
-        b.eraseColor(P.bg)
-        val loc = IntArray(2)
-        getLocationOnScreen(loc)
-        val tloc = IntArray(2)
-        t.getLocationOnScreen(tloc)
-        val save = c.save()
-        c.scale(1f / down, 1f / down)
-        c.translate((tloc[0] - loc[0]).toFloat(), (tloc[1] - loc[1]).toFloat())
-        t.draw(c)
-        c.restoreToCount(save)
-        val w = b.width
-        val h = b.height
-        b.getPixels(a1, 0, w, 0, 0, w, h)
-        blurPass(a1, a2, w, h)
-        blurPass(a2, a1, w, h)
-        b.setPixels(a1, 0, w, 0, 0, w, h)
-        rectF.set(0f, 0f, width.toFloat(), height.toFloat())
-        val rad = height / 2f
-        path.reset()
-        path.addRoundRect(rectF, rad, rad, Path.Direction.CCW)
-        canvas.save()
-        canvas.clipPath(path)
-        canvas.drawBitmap(b, null, rectF, paint)
-        canvas.drawColor(P.navGlass)
-        canvas.restore()
-        val sw = dens
-        val stroke = Paint(Paint.ANTI_ALIAS_FLAG)
-        stroke.style = Paint.Style.STROKE
-        stroke.strokeWidth = sw
-        stroke.color = P.border
-        val ins = sw / 2f
-        rectF.set(ins, ins, width - ins, height - ins)
-        path.reset()
-        path.addRoundRect(rectF, (height - ins * 2) / 2f, (height - ins * 2) / 2f, Path.Direction.CCW)
-        canvas.drawPath(path, stroke)
-        super.onDraw(canvas)
-    }
-
-    private fun blurPass(src: IntArray, dst: IntArray, w: Int, h: Int) {
-        for (y in 0 until h) {
-            for (x in 0 until w) {
-                var r = 0
-                var g = 0
-                var b = 0
-                var a = 0
-                var n = 0
-                for (dy in -1..1) {
-                    val yy = y + dy
-                    if (yy < 0 || yy >= h) continue
-                    val row = yy * w
-                    for (dx in -1..1) {
-                        val xx = x + dx
-                        if (xx < 0 || xx >= w) continue
-                        val c = src[row + xx]
-                        a += (c ushr 24) and 0xFF
-                        r += (c ushr 16) and 0xFF
-                        g += (c ushr 8) and 0xFF
-                        b += c and 0xFF
-                        n++
-                    }
-                }
-                dst[y * w + x] = (a / n shl 24) or (r / n shl 16) or (g / n shl 8) or (b / n)
-            }
-        }
     }
 }
