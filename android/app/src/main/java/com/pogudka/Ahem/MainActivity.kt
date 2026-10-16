@@ -5,6 +5,7 @@ import android.animation.ObjectAnimator
 import android.app.Activity
 import android.graphics.Bitmap
 import android.graphics.Typeface
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -16,7 +17,6 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
-import android.widget.Toast
 import androidx.core.content.res.ResourcesCompat
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.database.DataSnapshot
@@ -88,6 +88,7 @@ class MainActivity : Activity() {
     internal var currentChatOtherUid = ""
     internal var currentChatOtherNick = ""
     internal var convListener: ValueEventListener? = null
+    internal var convListener2: ValueEventListener? = null
 
     internal lateinit var profileRoot: LinearLayout
     internal lateinit var profileAvatar: ImageView
@@ -126,7 +127,6 @@ class MainActivity : Activity() {
     internal val gridStatsCache = HashMap<String, Pair<Long, Long>>()
 
     private var authListener: FirebaseAuth.AuthStateListener? = null
-    private var connectedListener: ValueEventListener? = null
     internal val avatarCache = HashMap<String, Bitmap>()
     internal val imageCache = HashMap<String, Bitmap>()
     internal val mediaCache = HashMap<String, String>()
@@ -160,6 +160,20 @@ class MainActivity : Activity() {
         if (!::navWrap.isInitialized) return
         navWrap.visibility = if (v) View.VISIBLE else View.GONE
         glassNav?.requestRefresh()
+    }
+
+    private fun hookGlassScroll() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+        val refresh = { _: View?, _: Int, _: Int, _: Int, _: Int -> glassNav?.requestRefresh() }
+        if (::feedScroll.isInitialized) feedScroll.setOnScrollChangeListener(refresh)
+        if (::profileScroll.isInitialized) profileScroll.setOnScrollChangeListener(refresh)
+        if (::convScroll.isInitialized) convScroll.setOnScrollChangeListener(refresh)
+    }
+
+    private fun pumpGlass() {
+        uiHandler.postDelayed({ glassNav?.requestRefresh() }, 350)
+        uiHandler.postDelayed({ glassNav?.requestRefresh() }, 900)
+        uiHandler.postDelayed({ glassNav?.requestRefresh() }, 1600)
     }
 
     internal fun saveSessionPrefs() {
@@ -246,21 +260,10 @@ class MainActivity : Activity() {
         chatListRows.setPadding(0, 0, 0, navSpace)
 
         glass.attach(root, navWrap)
+        hookGlassScroll()
+        pumpGlass()
 
         showTab(0)
-
-        connectedListener = object : ValueEventListener {
-            override fun onDataChange(snapshot: DataSnapshot) {
-                val connected = snapshot.getValue(Boolean::class.java) ?: false
-                if (!connected && !netWarned) {
-                    netWarned = true
-                    Toast.makeText(this@MainActivity, "Нет соединения с сервером Firebase: сеть/VPN", Toast.LENGTH_LONG).show()
-                }
-                if (connected) netWarned = false
-            }
-            override fun onCancelled(error: DatabaseError) {}
-        }
-        database.child(".info/connected").addValueEventListener(connectedListener!!)
 
         authListener = FirebaseAuth.AuthStateListener { firebaseAuth ->
             val user = firebaseAuth.currentUser
@@ -285,6 +288,7 @@ class MainActivity : Activity() {
                             saveSessionPrefs()
                             if (::profileRoot.isInitialized) refreshProfile(this@MainActivity)
                             renderFeed(this@MainActivity)
+                            pumpGlass()
                         }
                         override fun onCancelled(error: DatabaseError) { dbDenied(this@MainActivity, error) }
                     })
@@ -317,16 +321,16 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         super.onDestroy()
         authListener?.let { auth.removeAuthStateListener(it) }
-        connectedListener?.let { database.child(".info/connected").removeEventListener(it) }
         ptrAnimator?.cancel()
         convListener?.let { database.child("conversations").child(currentUserId).removeEventListener(it) }
+        convListener2?.let { database.child("conversations").removeEventListener(it) }
     }
 
     internal fun showTab(i: Int, keep: Boolean = false) {
         for (idx in tabs.indices) tabs[idx].visibility = if (idx == i) View.VISIBLE else View.GONE
         for (idx in 0 until 4) navIcons[idx].setColorFilter(if (idx == i) P.accent else P.navInactive)
         setNavVisible(true)
-        glassNav?.requestRefresh()
+        uiHandler.postDelayed({ glassNav?.requestRefresh() }, 300)
         if (i == 3) {
             if (!keep) {
                 viewingUserId = currentUserId
