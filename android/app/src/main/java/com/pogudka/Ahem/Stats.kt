@@ -66,7 +66,9 @@ internal fun attachLike(
 internal fun incrementViews(act: MainActivity, postId: String, onDone: ((Long) -> Unit)?) {
     if (act.currentUserId.isEmpty()) return
     if (postId in act.viewedLocally) {
-        onDone?.invoke(((act.statsMap[postId]?.child("views")?.value as? Number)?.toLong()) ?: 0L)
+        val cur = ((act.statsMap[postId]?.child("views")?.value as? Number)?.toLong()) ?: 0L
+        act.viewsTvMap[postId]?.forEach { it.text = fmtNum(cur) }
+        onDone?.invoke(cur)
         return
     }
     act.database.child("postStats").child(postId).runTransaction(object : Transaction.Handler {
@@ -86,6 +88,7 @@ internal fun incrementViews(act: MainActivity, postId: String, onDone: ((Long) -
                 val nv = (data.child("views").value as? Number)?.toLong() ?: 0L
                 act.viewedLocally.add(postId)
                 act.statsMap[postId] = data
+                act.viewsTvMap[postId]?.forEach { it.text = fmtNum(nv) }
                 onDone?.invoke(nv)
             }
         }
@@ -107,7 +110,7 @@ internal fun migrateStats(act: MainActivity, onDone: () -> Unit) {
                 if (!ok) failed++
                 doneCnt++
                 if (doneCnt >= total) {
-                    if (failed == 0 && total >= 0) prefs.edit().putBoolean("migrated_v4", true).apply()
+                    if (failed == 0) prefs.edit().putBoolean("migrated_v4", true).apply()
                     onDone()
                 }
             }
