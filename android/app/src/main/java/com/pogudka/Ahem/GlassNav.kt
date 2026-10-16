@@ -78,25 +78,31 @@ internal class GlassDrawable : Drawable() {
     private fun refresh() {
         val root = sourceRoot ?: return
         val ex = excludeView ?: return
-        if (ex.visibility != View.VISIBLE || ex.width <= 0 || ex.height <= 0) return
+        if (ex.visibility != View.VISIBLE) return
         val w = ex.width
         val h = ex.height
+        if (w <= 0 || h <= 0) return
 
-        var s = src
-        if (s == null || s.width != w || s.height != h) {
-            s = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-            src = s
-        }
         val hw = (w / 2).coerceAtLeast(1)
         val hh = (h / 2).coerceAtLeast(1)
         val qw = (w / 4).coerceAtLeast(1)
         val qh = (h / 4).coerceAtLeast(1)
-        if (small == null || small.width != hw || small.height != hh) {
-            small = Bitmap.createBitmap(hw, hh, Bitmap.Config.ARGB_8888)
-        }
-        if (quarter == null || quarter.width != qw || quarter.height != qh) {
-            quarter = Bitmap.createBitmap(qw, qh, Bitmap.Config.ARGB_8888)
-        }
+
+        // локальные non-null буферы: smart cast на поля класса не требуется
+        val localSrc: Bitmap
+        val es = src
+        if (es != null && es.width == w && es.height == h) localSrc = es
+        else { localSrc = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888); src = localSrc }
+
+        val localSmall: Bitmap
+        val em = small
+        if (em != null && em.width == hw && em.height == hh) localSmall = em
+        else { localSmall = Bitmap.createBitmap(hw, hh, Bitmap.Config.ARGB_8888); small = localSmall }
+
+        val localQuarter: Bitmap
+        val eq = quarter
+        if (eq != null && eq.width == qw && eq.height == qh) localQuarter = eq
+        else { localQuarter = Bitmap.createBitmap(qw, qh, Bitmap.Config.ARGB_8888); quarter = localQuarter }
 
         ex.getLocationInWindow(locSelf)
         root.getLocationInWindow(locRoot)
@@ -104,7 +110,7 @@ internal class GlassDrawable : Drawable() {
         val dy = (locSelf[1] - locRoot[1]).toFloat()
         val oldVis = ex.visibility
         ex.visibility = View.INVISIBLE
-        val cs = Canvas(s)
+        val cs = Canvas(localSrc)
         cs.drawColor(0x00000000)
         cs.translate(-dx, -dy)
         cs.clipRect(0f, 0f, w.toFloat(), h.toFloat())
@@ -113,20 +119,19 @@ internal class GlassDrawable : Drawable() {
 
         rSmall.set(0f, 0f, hw.toFloat(), hh.toFloat())
         rQuarter.set(0f, 0f, qw.toFloat(), qh.toFloat())
-        val sm = small!!
-        val qt = quarter!!
-        val cd1 = Canvas(sm)
+
+        val cd1 = Canvas(localSmall)
         cd1.drawColor(0x00000000)
-        cd1.drawBitmap(s, null, rSmall, paint)
-        var cur: Bitmap = sm
+        cd1.drawBitmap(localSrc, null, rSmall, paint)
+        var cur: Bitmap = localSmall
         for (i in 0 until blurLevel) {
-            val cq = Canvas(qt)
+            val cq = Canvas(localQuarter)
             cq.drawColor(0x00000000)
             cq.drawBitmap(cur, null, rQuarter, paint)
-            val cu = Canvas(sm)
+            val cu = Canvas(localSmall)
             cu.drawColor(0x00000000)
-            cu.drawBitmap(qt, null, rSmall, paint)
-            cur = sm
+            cu.drawBitmap(localQuarter, null, rSmall, paint)
+            cur = localSmall
         }
         blurred = cur
         invalidateSelf()
