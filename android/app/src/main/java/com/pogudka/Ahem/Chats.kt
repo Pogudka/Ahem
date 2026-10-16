@@ -43,6 +43,19 @@ private fun msgNick(m: DataSnapshot): String {
     return ""
 }
 
+// ориентация: senderUid однозначен в обоих ящиках; поле mine неоднозначно между ящиками,
+// поэтому для чужого ящика инвертируем; древние без всего -> фолбэк по ящику
+private fun msgMine(m: DataSnapshot, myUid: String, boxIsMine: Boolean): Boolean {
+    val su = m.child("senderUid").getValue(String::class.java)
+        ?: m.child("from").getValue(String::class.java)
+        ?: m.child("uid").getValue(String::class.java)
+        ?: ""
+    if (su.isNotEmpty()) return su == myUid
+    val mine = m.child("mine").getValue(Boolean::class.java)
+    if (mine != null) return if (boxIsMine) mine else !mine
+    return boxIsMine
+}
+
 internal fun buildChats(act: MainActivity): View {
     val tab = FrameLayout(act)
     tab.setBackgroundColor(P.bg)
@@ -179,6 +192,8 @@ internal fun closeConversation(act: MainActivity) {
     }
     act.convListener = null
     act.convListener2 = null
+    act.chatSnapMine = null
+    act.chatSnapPeer = null
     act.currentChat = ""
     act.currentChatOtherUid = ""
     act.currentChatOtherNick = ""
@@ -198,6 +213,8 @@ internal fun openChat(act: MainActivity, peerUid: String, peerNick: String) {
     act.convRoot.visibility = View.VISIBLE
     act.setNavVisible(false)
     act.convBox.removeAllViews()
+    act.chatSnapMine = null
+    act.chatSnapPeer = null
 
     act.convListener?.let {
         act.database.child("conversations").child(act.currentUserId).child(peerUid).removeEventListener(it)
@@ -206,16 +223,21 @@ internal fun openChat(act: MainActivity, peerUid: String, peerNick: String) {
         act.database.child("conversations").child(peerUid).child(act.currentUserId).removeEventListener(it)
     }
 
-    // два ящика пары; ориентация берётся от ящика-источника, дедуп по время+текст
     val boxMine = act.database.child("conversations").child(act.currentUserId).child(peerUid)
     val boxPeer = act.database.child("conversations").child(peerUid).child(act.currentUserId)
 
     val l1 = object : ValueEventListener {
-        override fun onDataChange(s: DataSnapshot) { mergeRender(act, s, true, boxPeer) }
+        override fun onDataChange(s: DataSnapshot) {
+            act.chatSnapMine = s
+            renderMergedChat(act)
+        }
         override fun onCancelled(error: DatabaseError) { dbDenied(act, error) }
     }
     val l2 = object : ValueEventListener {
-        override fun onDataChange(s: DataSnapshot) { mergeRender(act, boxMine, true, s) }
+        override fun onDataChange(s: DataSnapshot) {
+            act.chatSnapPeer = s
+            renderMergedChat(act)
+        }
         override fun onCancelled(error: DatabaseError) { dbDenied(act, error) }
     }
     act.convListener = l1
@@ -224,20 +246,20 @@ internal fun openChat(act: MainActivity, peerUid: String, peerNick: String) {
     boxPeer.addValueEventListener(l2)
 }
 
-private fun mergeRender(act: MainActivity, mineBox: DataSnapshot?, peerBox: DataSnapshot?) {
+private fun renderMergedChat(act: MainActivity) {
     val items = ArrayList<Pair<DataSnapshot, Boolean>>()
     val seen = HashSet<String>()
-    fun add(s: DataSnapshot?, mine: Boolean) {
+    fun add(s: DataSnapshot?, boxIsMine: Boolean) {
         if (s == null) return
         for (c in s.children) {
             val key = msgTs(c).toString() + "|" + msgText(c)
             if (key in seen) continue
             seen.add(key)
-            items.add(Pair(c, mine))
+            items.add(Pair(c, msgMine(c, act.currentUserId, boxIsMine)))
         }
     }
-    add(mineBox, true)
-    add(peerBox, false)
+    add(act.chatSnapMine, true)
+    add(act.chatSnapPeer, false)
     items.sortBy { msgTs(it.first) }
     renderConversation(act, items)
 }
