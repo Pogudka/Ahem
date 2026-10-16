@@ -2,18 +2,75 @@ package com.pogudka.Ahem
 
 import android.view.Gravity
 import android.view.View
-import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
-import android.widget.Toast
 import com.google.firebase.database.DataSnapshot
 import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.ValueEventListener
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+
+internal fun updateConversation(act: MainActivity, ownerUid: String, otherUid: String, otherNick: String, lastText: String, ts: Long) {
+    if (ownerUid.isEmpty() || otherUid.isEmpty()) return
+    val node = HashMap<String, Any>()
+    node["nick"] = otherNick
+    node["last"] = lastText
+    node["ts"] = ts
+    act.database.child("conversations").child(ownerUid).child(otherUid).setValue(node)
+}
+
+internal fun loadConversations(act: MainActivity) {
+    if (act.currentUserId.isEmpty()) return
+    act.chatListRows.removeAllViews()
+    act.convListener?.let { act.database.child("conversations").child(act.currentUserId).removeEventListener(it) }
+    act.convListener = act.database.child("conversations").child(act.currentUserId)
+        .addValueEventListener(object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                try {
+                    act.chatListRows.removeAllViews()
+                    val list = ArrayList<DataSnapshot>()
+                    for (c in snapshot.children) list.add(c)
+                    list.sortByDescending { (it.child("ts").value as? Number)?.toLong() ?: 0L }
+                    if (list.isEmpty()) {
+                        act.chatListRows.addView(tv(act, "Нет диалогов. Найди человека через поиск.", 14f, act.fMed, P.textSec))
+                    }
+                    for (c in list) {
+                        val otherUid = c.key ?: ""
+                        val nick = c.child("nick").getValue(String::class.java) ?: "?"
+                        val last = c.child("last").getValue(String::class.java) ?: ""
+                        val ts = (c.child("ts").value as? Number)?.toLong() ?: 0L
+                        val timeStr = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(ts))
+                        val row = LinearLayout(act)
+                        row.orientation = LinearLayout.HORIZONTAL
+                        row.gravity = Gravity.CENTER_VERTICAL
+                        row.background = surf(act, 16, filled = true)
+                        row.layoutParams = act.lp(-1, -2, act.dp(8))
+                        row.setPadding(act.dp(12), act.dp(10), act.dp(14), act.dp(10))
+                        row.addView(avatarView(act, null, act.dp(44), nick))
+                        val col = LinearLayout(act)
+                        col.orientation = LinearLayout.VERTICAL
+                        val clp = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT)
+                        col.layoutParams = clp
+                        act.wt(col, 1f)
+                        clp.marginStart = act.dp(12)
+                        col.addView(tv(act, nick, 15f, act.fSemi, P.text))
+                        val lastTv = tv(act, if (last.isEmpty()) "…" else last, 13f, act.fReg, P.textSec)
+                        lastTv.maxLines = 1
+                        col.addView(lastTv)
+                        row.addView(col)
+                        row.addView(tv(act, timeStr, 11f, act.fReg, P.textSec))
+                        row.setOnClickListener { openChat(act, otherUid, nick) }
+                        act.chatListRows.addView(row)
+                    }
+                } catch (e: Exception) {
+                }
+            }
+            override fun onCancelled(error: DatabaseError) { dbDenied(act, error) }
+        })
+}
 
 internal fun buildChats(act: MainActivity): View {
     val col = LinearLayout(act)
@@ -23,6 +80,8 @@ internal fun buildChats(act: MainActivity): View {
 
     act.chatListRoot = LinearLayout(act)
     act.chatListRoot.orientation = LinearLayout.VERTICAL
+    act.chatListRoot.layoutParams = act.lp(-1, 0, 0)
+    act.wt(act.chatListRoot, 1f)
     val head = tv(act, "Сообщения", 24f, act.fBold, P.text)
     head.layoutParams = act.lp(-1, -2, act.dp(6))
     act.chatStatus = tv(act, "подключено", 12f, act.fReg, P.textSec)
@@ -59,6 +118,8 @@ internal fun buildChats(act: MainActivity): View {
     act.convRoot.orientation = LinearLayout.VERTICAL
     act.convRoot.visibility = View.GONE
     act.convRoot.setBackgroundColor(P.bg)
+    act.convRoot.layoutParams = act.lp(-1, 0, 0)
+    act.wt(act.convRoot, 1f)
     val top = LinearLayout(act)
     top.orientation = LinearLayout.HORIZONTAL
     top.gravity = Gravity.CENTER_VERTICAL
@@ -109,7 +170,9 @@ internal fun buildChats(act: MainActivity): View {
             override fun onDataChange(snapshot: DataSnapshot) {
                 try {
                     for (u in snapshot.children) {
+                        val uid = u.key ?: ""
                         val nick = u.child("nick").getValue(String::class.java) ?: ""
+                        if (uid == act.currentUserId) continue
                         if (nick.lowercase().contains(q)) {
                             val row = LinearLayout(act)
                             row.orientation = LinearLayout.HORIZONTAL
@@ -124,8 +187,10 @@ internal fun buildChats(act: MainActivity): View {
                             ntLp.marginStart = act.dp(12)
                             nt.layoutParams = ntLp
                             row.addView(nt)
-                            val uid = u.key ?: ""
-                            row.setOnClickListener { openChat(act, uid, nick); act.searchResults.removeAllViews() }
+                            row.setOnClickListener {
+                                act.searchResults.removeAllViews()
+                                openChat(act, uid, nick)
+                            }
                             act.searchResults.addView(row)
                         }
                     }
@@ -133,7 +198,7 @@ internal fun buildChats(act: MainActivity): View {
                 } catch (e: Exception) {
                 }
             }
-            override fun onCancelled(error: DatabaseError) {}
+            override fun onCancelled(error: DatabaseError) { dbDenied(act, error) }
         })
     }
 
@@ -141,18 +206,22 @@ internal fun buildChats(act: MainActivity): View {
         act.currentChat = ""
         act.convRoot.visibility = View.GONE
         act.chatListRoot.visibility = View.VISIBLE
+        loadConversations(act)
     }
 
     sendIv.setOnClickListener {
         val text = act.msgField.text.toString()
         if (text.isEmpty() || act.currentChat.isEmpty()) return@setOnClickListener
         val msgId = act.database.child("chats").child(act.currentChat).child("messages").push().key ?: return@setOnClickListener
+        val now = System.currentTimeMillis()
         val msg = HashMap<String, Any>()
         msg["senderId"] = act.currentUserId
         msg["senderNick"] = act.currentNick
         msg["text"] = text
-        msg["timestamp"] = System.currentTimeMillis()
+        msg["timestamp"] = now
         act.database.child("chats").child(act.currentChat).child("messages").child(msgId).setValue(msg)
+        updateConversation(act, act.currentUserId, act.currentChatOtherUid, act.currentChatOtherNick, text, now)
+        updateConversation(act, act.currentChatOtherUid, act.currentUserId, act.currentNick, text, now)
         act.msgField.setText("")
     }
 
@@ -163,11 +232,26 @@ internal fun buildChats(act: MainActivity): View {
 
 internal fun openChat(act: MainActivity, otherUserId: String, otherNick: String) {
     if (otherUserId.isEmpty()) return
+    if (otherUserId == act.currentUserId) {
+        android.widget.Toast.makeText(act, "Нельзя написать самому себе", android.widget.Toast.LENGTH_SHORT).show()
+        return
+    }
+    act.currentChatOtherUid = otherUserId
+    act.currentChatOtherNick = otherNick
     act.currentChat = if (act.currentUserId < otherUserId) "${act.currentUserId}_$otherUserId" else "${otherUserId}_${act.currentUserId}"
     act.convTitle.text = otherNick
     act.chatListRoot.visibility = View.GONE
     act.convRoot.visibility = View.VISIBLE
     act.convBox.removeAllViews()
+    act.database.child("conversations").child(act.currentUserId).child(otherUserId)
+        .addListenerForSingleValueEvent(object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                if (!snapshot.exists()) {
+                    updateConversation(act, act.currentUserId, otherUserId, otherNick, "", System.currentTimeMillis())
+                }
+            }
+            override fun onCancelled(error: DatabaseError) {}
+        })
     loadMessages(act)
 }
 
@@ -176,10 +260,16 @@ internal fun loadMessages(act: MainActivity) {
         .addValueEventListener(object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
                 act.convBox.removeAllViews()
+                var lastText = ""
+                var lastTs = 0L
+                var lastMine = true
                 for (msg in snapshot.children) {
                     val text = msg.child("text").getValue(String::class.java) ?: ""
                     val ts = msg.child("timestamp").getValue(Long::class.java) ?: 0
                     val isMe = msg.child("senderId").getValue(String::class.java) == act.currentUserId
+                    lastText = text
+                    lastTs = ts
+                    lastMine = isMe
                     val timeStr = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(ts))
                     val row = LinearLayout(act)
                     row.orientation = LinearLayout.HORIZONTAL
@@ -201,8 +291,11 @@ internal fun loadMessages(act: MainActivity) {
                     row.addView(bubble)
                     act.convBox.addView(row)
                 }
+                if (!lastMine && lastText.isNotEmpty()) {
+                    updateConversation(act, act.currentUserId, act.currentChatOtherUid, act.currentChatOtherNick, lastText, lastTs)
+                }
                 act.convScroll.post { act.convScroll.fullScroll(View.FOCUS_DOWN) }
             }
-            override fun onCancelled(error: DatabaseError) {}
+            override fun onCancelled(error: DatabaseError) { dbDenied(act, error) }
         })
 }
