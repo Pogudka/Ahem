@@ -116,7 +116,7 @@ internal fun iconRound(act: MainActivity, res: Int, tint: Int, size: Int): Image
     iv.setPadding(act.dp(9), act.dp(9), act.dp(9), act.dp(9))
     val g = GlassDrawable()
     g.setRadius(size / 2f)
-    g.setBlurRadius(act.dp(10).toFloat())
+    g.setBlurLevel(2)
     g.setGlassTint(P.navGlass)
     g.setBorder(P.border, act.dp(1).toFloat())
     iv.background = g
