@@ -14,6 +14,28 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+private fun msgText(m: DataSnapshot): String {
+    val a = m.child("text").getValue(String::class.java)
+    if (!a.isNullOrEmpty()) return a
+    val b = m.child("message").getValue(String::class.java)
+    if (!b.isNullOrEmpty()) return b
+    return ""
+}
+
+private fun msgTs(m: DataSnapshot): Long {
+    val v = m.child("ts").value ?: m.child("timestamp").value ?: m.child("time").value
+    if (v is Number) return v.toLong()
+    return (v as? String)?.toLongOrNull() ?: 0L
+}
+
+private fun msgMine(m: DataSnapshot, myUid: String): Boolean {
+    val mine = m.child("mine").getValue(Boolean::class.java)
+    if (mine != null) return mine
+    val su = m.child("senderUid").getValue(String::class.java) ?: m.child("uid").getValue(String::class.java) ?: ""
+    if (su.isNotEmpty()) return su == myUid
+    return false
+}
+
 internal fun buildChats(act: MainActivity): View {
     val tab = FrameLayout(act)
     tab.setBackgroundColor(P.bg)
@@ -101,8 +123,9 @@ internal fun buildChats(act: MainActivity): View {
     inputBar.orientation = LinearLayout.HORIZONTAL
     inputBar.gravity = Gravity.CENTER_VERTICAL
     val ibg = GlassDrawable()
+    ibg.setLiveBlur(true)
     ibg.setRadius(act.dp(26).toFloat())
-    ibg.setBlurLevel(3)
+    ibg.setBlurLevel(2)
     ibg.setGlassTint(P.navGlass)
     ibg.setBorder(P.border, act.dp(1).toFloat())
     inputBar.background = ibg
@@ -181,13 +204,14 @@ internal fun renderConversation(act: MainActivity, snapshot: DataSnapshot) {
     act.convBox.removeAllViews()
     val list = ArrayList<DataSnapshot>()
     for (c in snapshot.children) list.add(c)
-    list.sortBy { getTs(it) }
+    list.sortBy { msgTs(it) }
     val df = SimpleDateFormat("HH:mm", Locale.getDefault())
     val maxW = (act.resources.displayMetrics.widthPixels * 0.78).toInt()
     for (m in list) {
-        val text = m.child("text").getValue(String::class.java) ?: ""
-        val ts = getTs(m)
-        val mine = m.child("mine").getValue(Boolean::class.java) ?: false
+        val text = msgText(m)
+        if (text.isEmpty()) continue
+        val ts = msgTs(m)
+        val mine = msgMine(m, act.currentUserId)
         val row = LinearLayout(act)
         row.orientation = LinearLayout.HORIZONTAL
         row.gravity = Gravity.CENTER_VERTICAL
@@ -215,13 +239,15 @@ internal fun renderConversation(act: MainActivity, snapshot: DataSnapshot) {
         tvMsg.setTextColor(if (mine) P.accentText else P.text)
         tvMsg.maxWidth = maxW
         bubble.addView(tvMsg)
-        val tvTime = TextView(act)
-        tvTime.text = df.format(Date(ts))
-        tvTime.textSize = 10f
-        tvTime.typeface = act.fReg
-        tvTime.gravity = if (mine) Gravity.END else Gravity.START
-        tvTime.setTextColor(if (mine) 0x99FFFFFF.toInt() else P.textSec)
-        bubble.addView(tvTime)
+        if (ts > 0) {
+            val tvTime = TextView(act)
+            tvTime.text = df.format(Date(ts))
+            tvTime.textSize = 10f
+            tvTime.typeface = act.fReg
+            tvTime.gravity = if (mine) Gravity.END else Gravity.START
+            tvTime.setTextColor(if (mine) 0x99FFFFFF.toInt() else P.textSec)
+            bubble.addView(tvTime)
+        }
         row.addView(bubble, blp)
         if (!mine) {
             val sp = View(act)
@@ -239,20 +265,30 @@ internal fun sendMessage(act: MainActivity) {
     val text = act.msgField.text.toString().trim()
     if (text.isEmpty()) return
     val now = System.currentTimeMillis()
-    val key1 = act.database.child("conversations").child(act.currentUserId).child(act.currentChat).push().key ?: return
+    val peer = act.currentChat
+    val base = act.database.child("conversations")
+    val key1 = base.child(act.currentUserId).child(peer).push().key ?: return
     val m1 = HashMap<String, Any>()
     m1["text"] = text
+    m1["message"] = text
     m1["ts"] = now
+    m1["timestamp"] = now
     m1["mine"] = true
+    m1["senderUid"] = act.currentUserId
+    m1["uid"] = act.currentUserId
     m1["nick"] = act.currentNick
-    act.database.child("conversations").child(act.currentUserId).child(act.currentChat).child(key1).setValue(m1)
-    val key2 = act.database.child("conversations").child(act.currentChat).child(act.currentUserId).push().key ?: return
+    base.child(act.currentUserId).child(peer).child(key1).setValue(m1)
+    val key2 = base.child(peer).child(act.currentUserId).push().key ?: return
     val m2 = HashMap<String, Any>()
     m2["text"] = text
+    m2["message"] = text
     m2["ts"] = now
+    m2["timestamp"] = now
     m2["mine"] = false
+    m2["senderUid"] = act.currentUserId
+    m2["uid"] = act.currentUserId
     m2["nick"] = act.currentNick
-    act.database.child("conversations").child(act.currentChat).child(act.currentUserId).child(key2).setValue(m2)
+    base.child(peer).child(act.currentUserId).child(key2).setValue(m2)
     act.msgField.setText("")
 }
 
@@ -262,24 +298,57 @@ internal fun loadConversations(act: MainActivity) {
         return
     }
     act.chatStatus.text = "загрузка..."
+    act.database.child("users").addListenerForSingleValueEvent(object : ValueEventListener {
+        override fun onDataChange(uSnap: DataSnapshot) {
+            val nickMap = HashMap<String, String>()
+            val avatarMap = HashMap<String, String>()
+            for (u in uSnap.children) {
+                val uid = u.key ?: continue
+                nickMap[uid] = u.child("nick").getValue(String::class.java) ?: "?"
+                avatarMap[uid] = u.child("avatar").getValue(String::class.java) ?: ""
+            }
+            loadConvRows(act, nickMap, avatarMap)
+        }
+        override fun onCancelled(error: DatabaseError) {
+            loadConvRows(act, HashMap(), HashMap())
+        }
+    })
+}
+
+private fun loadConvRows(act: MainActivity, nickMap: HashMap<String, String>, avatarMap: HashMap<String, String>) {
     act.database.child("conversations").child(act.currentUserId).addListenerForSingleValueEvent(object : ValueEventListener {
         override fun onDataChange(snapshot: DataSnapshot) {
             try {
                 act.chatListRows.removeAllViews()
                 act.searchResults.removeAllViews()
-                val peers = HashMap<String, Pair<String, Long>>()
+                val uids = ArrayList<String>()
+                val nicks = HashMap<String, String>()
+                val previews = HashMap<String, String>()
+                val times = HashMap<String, Long>()
                 for (p in snapshot.children) {
                     val uid = p.key ?: continue
+                    if (uid == act.currentUserId) continue
                     var lastText = ""
                     var lastTs = 0L
-                    var nick = "?"
                     for (m in p.children) {
-                        val t = m.child("text").getValue(String::class.java) ?: ""
-                        val ts = getTs(m)
-                        val n = m.child("nick").getValue(String::class.java) ?: "?"
-                        if (ts >= lastTs) { lastTs = ts; lastText = t; nick = n }
+                        val t = msgText(m)
+                        val ts = msgTs(m)
+                        if (ts >= lastTs && t.isNotEmpty()) { lastTs = ts; lastText = t }
                     }
-                    peers[uid] = Pair(nick, lastTs)
+                    uids.add(uid)
+                    nicks[uid] = nickMap[uid] ?: "?"
+                    previews[uid] = lastText
+                    times[uid] = lastTs
+                }
+                uids.sortByDescending { times[it] ?: 0L }
+                if (uids.isEmpty()) {
+                    act.chatStatus.text = "Нет диалогов. Найди кого-нибудь через поиск в ленте."
+                } else {
+                    act.chatStatus.text = ""
+                }
+                for (uid in uids) {
+                    val nick = nicks[uid] ?: "?"
+                    val preview = previews[uid] ?: ""
                     val row = LinearLayout(act)
                     row.orientation = LinearLayout.HORIZONTAL
                     row.gravity = Gravity.CENTER_VERTICAL
@@ -288,7 +357,13 @@ internal fun loadConversations(act: MainActivity) {
                     rlp.bottomMargin = act.dp(8)
                     row.layoutParams = rlp
                     row.setPadding(act.dp(12), act.dp(12), act.dp(12), act.dp(12))
-                    row.addView(avatarView(act, null, act.dp(48), nick))
+                    val av = avatarView(act, null, act.dp(48), nick)
+                    val avB64 = avatarMap[uid] ?: ""
+                    if (avB64.isNotEmpty()) {
+                        val b = decodeScaled(avB64, act.dp(48))
+                        if (b != null) av.setImageBitmap(makeCircularBitmap(b, act.dp(48)))
+                    }
+                    row.addView(av)
                     val box = LinearLayout(act)
                     box.orientation = LinearLayout.VERTICAL
                     val bp = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT)
@@ -296,12 +371,11 @@ internal fun loadConversations(act: MainActivity) {
                     bp.marginStart = act.dp(12)
                     box.layoutParams = bp
                     box.addView(tv(act, "@$nick", 15f, act.fSemi, P.text))
-                    box.addView(tv(act, lastText, 13f, act.fReg, P.textSec))
+                    box.addView(tv(act, preview, 13f, act.fReg, P.textSec))
                     row.addView(box)
                     row.setOnClickListener { openChat(act, uid, nick) }
                     act.chatListRows.addView(row)
                 }
-                act.chatStatus.text = if (peers.isEmpty()) "Нет диалогов" else ""
             } catch (e: Exception) {
             }
         }
