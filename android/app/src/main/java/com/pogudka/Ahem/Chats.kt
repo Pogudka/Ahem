@@ -15,25 +15,32 @@ import java.util.Date
 import java.util.Locale
 
 private fun msgText(m: DataSnapshot): String {
-    val a = m.child("text").getValue(String::class.java)
-    if (!a.isNullOrEmpty()) return a
-    val b = m.child("message").getValue(String::class.java)
-    if (!b.isNullOrEmpty()) return b
+    val keys = arrayOf("text", "message", "body", "content")
+    for (k in keys) {
+        val v = m.child(k).getValue(String::class.java)
+        if (!v.isNullOrEmpty()) return v
+    }
     return ""
 }
 
 private fun msgTs(m: DataSnapshot): Long {
-    val v = m.child("ts").value ?: m.child("timestamp").value ?: m.child("time").value
-    if (v is Number) return v.toLong()
-    return (v as? String)?.toLongOrNull() ?: 0L
+    val keys = arrayOf("ts", "timestamp", "time", "createdAt", "created", "date")
+    for (k in keys) {
+        val v = m.child(k).value
+        if (v is Number) return v.toLong()
+        val s = (v as? String)?.toLongOrNull()
+        if (s != null) return s
+    }
+    return 0L
 }
 
-private fun msgMine(m: DataSnapshot, myUid: String): Boolean {
-    val mine = m.child("mine").getValue(Boolean::class.java)
-    if (mine != null) return mine
-    val su = m.child("senderUid").getValue(String::class.java) ?: m.child("uid").getValue(String::class.java) ?: ""
-    if (su.isNotEmpty()) return su == myUid
-    return false
+private fun msgNick(m: DataSnapshot): String {
+    val keys = arrayOf("nick", "senderNick", "authorNick", "fromNick")
+    for (k in keys) {
+        val v = m.child(k).getValue(String::class.java)
+        if (!v.isNullOrEmpty()) return v
+    }
+    return ""
 }
 
 internal fun buildChats(act: MainActivity): View {
@@ -166,7 +173,12 @@ internal fun closeConversation(act: MainActivity) {
         act.database.child("conversations").child(act.currentUserId).child(act.currentChat)
             .removeEventListener(it)
     }
+    act.convListener2?.let {
+        act.database.child("conversations").child(act.currentChat).child(act.currentUserId)
+            .removeEventListener(it)
+    }
     act.convListener = null
+    act.convListener2 = null
     act.currentChat = ""
     act.currentChatOtherUid = ""
     act.currentChatOtherNick = ""
@@ -186,32 +198,58 @@ internal fun openChat(act: MainActivity, peerUid: String, peerNick: String) {
     act.convRoot.visibility = View.VISIBLE
     act.setNavVisible(false)
     act.convBox.removeAllViews()
+
     act.convListener?.let {
-        act.database.child("conversations").child(act.currentUserId).child(act.currentChat)
-            .removeEventListener(it)
+        act.database.child("conversations").child(act.currentUserId).child(peerUid).removeEventListener(it)
     }
-    act.convListener = object : ValueEventListener {
-        override fun onDataChange(snapshot: DataSnapshot) {
-            renderConversation(act, snapshot)
-        }
+    act.convListener2?.let {
+        act.database.child("conversations").child(peerUid).child(act.currentUserId).removeEventListener(it)
+    }
+
+    // два ящика пары; ориентация берётся от ящика-источника, дедуп по время+текст
+    val boxMine = act.database.child("conversations").child(act.currentUserId).child(peerUid)
+    val boxPeer = act.database.child("conversations").child(peerUid).child(act.currentUserId)
+
+    val l1 = object : ValueEventListener {
+        override fun onDataChange(s: DataSnapshot) { mergeRender(act, s, true, boxPeer) }
         override fun onCancelled(error: DatabaseError) { dbDenied(act, error) }
     }
-    act.database.child("conversations").child(act.currentUserId).child(peerUid)
-        .addValueEventListener(act.convListener!!)
+    val l2 = object : ValueEventListener {
+        override fun onDataChange(s: DataSnapshot) { mergeRender(act, boxMine, true, s) }
+        override fun onCancelled(error: DatabaseError) { dbDenied(act, error) }
+    }
+    act.convListener = l1
+    act.convListener2 = l2
+    boxMine.addValueEventListener(l1)
+    boxPeer.addValueEventListener(l2)
 }
 
-internal fun renderConversation(act: MainActivity, snapshot: DataSnapshot) {
+private fun mergeRender(act: MainActivity, mineBox: DataSnapshot?, peerBox: DataSnapshot?) {
+    val items = ArrayList<Pair<DataSnapshot, Boolean>>()
+    val seen = HashSet<String>()
+    fun add(s: DataSnapshot?, mine: Boolean) {
+        if (s == null) return
+        for (c in s.children) {
+            val key = msgTs(c).toString() + "|" + msgText(c)
+            if (key in seen) continue
+            seen.add(key)
+            items.add(Pair(c, mine))
+        }
+    }
+    add(mineBox, true)
+    add(peerBox, false)
+    items.sortBy { msgTs(it.first) }
+    renderConversation(act, items)
+}
+
+internal fun renderConversation(act: MainActivity, items: List<Pair<DataSnapshot, Boolean>>) {
     act.convBox.removeAllViews()
-    val list = ArrayList<DataSnapshot>()
-    for (c in snapshot.children) list.add(c)
-    list.sortBy { msgTs(it) }
     val df = SimpleDateFormat("HH:mm", Locale.getDefault())
     val maxW = (act.resources.displayMetrics.widthPixels * 0.78).toInt()
-    for (m in list) {
+    for ((m, mine) in items) {
         val text = msgText(m)
         if (text.isEmpty()) continue
         val ts = msgTs(m)
-        val mine = msgMine(m, act.currentUserId)
         val row = LinearLayout(act)
         row.orientation = LinearLayout.HORIZONTAL
         row.gravity = Gravity.CENTER_VERTICAL
@@ -271,22 +309,28 @@ internal fun sendMessage(act: MainActivity) {
     val m1 = HashMap<String, Any>()
     m1["text"] = text
     m1["message"] = text
+    m1["body"] = text
     m1["ts"] = now
     m1["timestamp"] = now
+    m1["createdAt"] = now
     m1["mine"] = true
     m1["senderUid"] = act.currentUserId
     m1["uid"] = act.currentUserId
+    m1["from"] = act.currentUserId
     m1["nick"] = act.currentNick
     base.child(act.currentUserId).child(peer).child(key1).setValue(m1)
     val key2 = base.child(peer).child(act.currentUserId).push().key ?: return
     val m2 = HashMap<String, Any>()
     m2["text"] = text
     m2["message"] = text
+    m2["body"] = text
     m2["ts"] = now
     m2["timestamp"] = now
+    m2["createdAt"] = now
     m2["mine"] = false
     m2["senderUid"] = act.currentUserId
     m2["uid"] = act.currentUserId
+    m2["from"] = act.currentUserId
     m2["nick"] = act.currentNick
     base.child(peer).child(act.currentUserId).child(key2).setValue(m2)
     act.msgField.setText("")
@@ -322,23 +366,24 @@ private fun loadConvRows(act: MainActivity, nickMap: HashMap<String, String>, av
                 act.chatListRows.removeAllViews()
                 act.searchResults.removeAllViews()
                 val uids = ArrayList<String>()
-                val nicks = HashMap<String, String>()
                 val previews = HashMap<String, String>()
                 val times = HashMap<String, Long>()
+                val msgNicks = HashMap<String, String>()
                 for (p in snapshot.children) {
                     val uid = p.key ?: continue
                     if (uid == act.currentUserId) continue
                     var lastText = ""
                     var lastTs = 0L
+                    var lastNick = ""
                     for (m in p.children) {
                         val t = msgText(m)
                         val ts = msgTs(m)
-                        if (ts >= lastTs && t.isNotEmpty()) { lastTs = ts; lastText = t }
+                        if (t.isNotEmpty() && ts >= lastTs) { lastTs = ts; lastText = t; lastNick = msgNick(m) }
                     }
                     uids.add(uid)
-                    nicks[uid] = nickMap[uid] ?: "?"
                     previews[uid] = lastText
                     times[uid] = lastTs
+                    if (lastNick.isNotEmpty()) msgNicks[uid] = lastNick
                 }
                 uids.sortByDescending { times[it] ?: 0L }
                 if (uids.isEmpty()) {
@@ -347,7 +392,7 @@ private fun loadConvRows(act: MainActivity, nickMap: HashMap<String, String>, av
                     act.chatStatus.text = ""
                 }
                 for (uid in uids) {
-                    val nick = nicks[uid] ?: "?"
+                    val nick = nickMap[uid]?.takeIf { it != "?" } ?: msgNicks[uid] ?: "?"
                     val preview = previews[uid] ?: ""
                     val row = LinearLayout(act)
                     row.orientation = LinearLayout.HORIZONTAL
