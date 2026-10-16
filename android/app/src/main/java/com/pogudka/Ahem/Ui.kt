@@ -120,10 +120,6 @@ internal fun iconRound(act: MainActivity, res: Int, tint: Int, size: Int): Image
     g.setGlassTint(P.navGlass)
     g.setBorder(P.border, act.dp(1).toFloat())
     iv.background = g
-    if (::act.rootFrame.isInitializedSafe()) {
-        g.attach(act.rootFrame, iv)
-    }
+    g.attach(act.rootFrame, iv)
     return iv
 }
-
-private fun ::MainActivity.rootFrame.isInitializedSafe(): Boolean = true
