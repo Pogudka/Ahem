@@ -1,5 +1,6 @@
 package com.pogudka.Ahem
 
+import android.graphics.Color
 import android.app.Dialog
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -800,4 +801,10 @@ internal fun loadProfileGrid(act: MainActivity, gen: Int, targetId: String) {
         override fun onDataChange(snapshot: DataSnapshot) { stSnap = snapshot; finish() }
         override fun onCancelled(error: DatabaseError) { stSnap = null; finish() }
     })
+}
+
+internal fun scheduleMigration(act: MainActivity) {
+    if (act.migrationScheduled) return
+    act.migrationScheduled = true
+    act.uiHandler.postDelayed({ migrateStats(act) { } }, 8000)
 }
