@@ -16,6 +16,8 @@ import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.MediaStore
 import android.text.InputType
 import android.text.util.Linkify
@@ -50,7 +52,15 @@ import java.util.Locale
 
 class MainActivity : Activity() {
 
-    // ================= ПАЛИТРА (только белый / чёрный / серый) =================
+    private val uiHandler = Handler(Looper.getMainLooper())
+
+    private data class Acc(
+        val uid: String,
+        val nick: String,
+        val email: String,
+        val pass: String
+    )
+
     private object P {
         var bg = 0xFFFFFFFF.toInt()
         var surface = 0xFFF7F7F9.toInt()
@@ -96,14 +106,9 @@ class MainActivity : Activity() {
     private fun isDark(): Boolean =
         getSharedPreferences("ahem", Context.MODE_PRIVATE).getBoolean("dark", false)
 
-    // ================= ФОРМАТ ЧИСЕЛ (10M / 100K / 10K) =================
     private fun trimNum(d: Double): String {
         val r = Math.round(d * 10.0) / 10.0
-        return if (r == Math.floor(r)) {
-            r.toLong().toString()
-        } else {
-            r.toString()
-        }
+        return if (r == Math.floor(r)) r.toLong().toString() else r.toString()
     }
 
     private fun fmtNum(n: Long): String {
@@ -118,13 +123,11 @@ class MainActivity : Activity() {
         return (v as? String)?.toLongOrNull() ?: 0L
     }
 
-    // ================= ШРИФТЫ =================
     private val fBold: Typeface by lazy { ResourcesCompat.getFont(this, R.font.unbounded)!! }
     private val fSemi: Typeface by lazy { ResourcesCompat.getFont(this, R.font.ubuntu_medium)!! }
     private val fMed: Typeface by lazy { ResourcesCompat.getFont(this, R.font.ubuntu_medium)!! }
     private val fReg: Typeface by lazy { ResourcesCompat.getFont(this, R.font.ubuntu_regular)!! }
 
-    // ================= РАЗМЕТКА =================
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
 
     private fun lp(w: Int, h: Int, margin: Int = 0): LinearLayout.LayoutParams {
@@ -141,13 +144,6 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun me(): String = currentNick.ifEmpty { "Аноним" }
-
-    private fun addKnown(n: String) {
-        if (n.isNotEmpty() && n != me()) knownNames.add(n)
-    }
-
-    // ПАРСИНГ СЧЁТЧИКА С ПОДДЕРЖКОЙ K / M (фикс лайков на округлённых числах)
     private fun parseCount(t: TextView): Int {
         val s = t.text.toString().substringAfter("♥").trim()
         if (s.isEmpty()) return 0
@@ -169,7 +165,6 @@ class MainActivity : Activity() {
         }
     }
 
-    // ================= ГРАФИКА =================
     private fun surf(radius: Int, filled: Boolean = true): GradientDrawable {
         val g = GradientDrawable()
         g.setColor(if (filled) P.surface else Color.TRANSPARENT)
@@ -245,7 +240,6 @@ class MainActivity : Activity() {
         return iv
     }
 
-    // ================= DECODE С УМЕНЬШЕНИЕМ (анти-OOM) =================
     private fun decodeScaled(b64: String, reqPx: Int): Bitmap? {
         return try {
             val bytes = Base64.decode(b64, Base64.NO_WRAP)
@@ -265,7 +259,6 @@ class MainActivity : Activity() {
         }
     }
 
-    // ================= АВАТАРКИ =================
     private fun makeCircularBitmap(source: Bitmap, targetSize: Int): Bitmap {
         val side = minOf(source.width, source.height)
         val sq = Bitmap.createBitmap(source, (source.width - side) / 2, (source.height - side) / 2, side, side)
@@ -307,7 +300,6 @@ class MainActivity : Activity() {
         return iv
     }
 
-    // ================= СОСТОЯНИЕ =================
     private lateinit var auth: FirebaseAuth
     private lateinit var database: DatabaseReference
 
@@ -349,7 +341,6 @@ class MainActivity : Activity() {
     private lateinit var convScroll: ScrollView
     private lateinit var msgField: EditText
     private var currentChat = ""
-    private val knownNames = LinkedHashSet<String>()
 
     private lateinit var profileRoot: LinearLayout
     private lateinit var profileAvatar: ImageView
@@ -371,6 +362,7 @@ class MainActivity : Activity() {
     private var profileMode = 0
     private var viewingUserId = ""
     private var viewingNick = ""
+    private var currentProfileTargetId = ""
     private var editAvatarView: ImageView? = null
 
     private val PICK_IMAGES = 1002
@@ -383,46 +375,82 @@ class MainActivity : Activity() {
     private val avatarCache = HashMap<String, Bitmap>()
     private val viewedLocally = HashSet<String>()
 
-    // ================= МУЛЬТИАККАУНТ (SharedPreferences) =================
-    // ФИКС: filter() возвращает неизменяемый List без add() -> явный цикл на ArrayList
-    private fun saveAccount(uid: String, nick: String, email: String) {
+    private fun saveAccount(uid: String, nick: String, email: String, pass: String) {
         if (uid.isEmpty()) return
         val prefs = getSharedPreferences("ahem", Context.MODE_PRIVATE)
         val raw = prefs.getString("accounts", "") ?: ""
-        val list = ArrayList<Triple<String, String, String>>()
+        val list = ArrayList<Acc>()
         for (rec in raw.split("\u0002")) {
             if (rec.isEmpty()) continue
             val parts = rec.split("\u0001")
-            if (parts.size == 3) {
-                list.add(Triple(parts[0], parts[1], parts[2]))
+            if (parts.size == 4) {
+                list.add(Acc(parts[0], parts[1], parts[2], parts[3]))
             }
         }
-        val filtered = ArrayList<Triple<String, String, String>>()
+        val filtered = ArrayList<Acc>()
         for (acc in list) {
-            if (acc.first != uid) {
-                filtered.add(acc)
-            }
+            if (acc.uid != uid) filtered.add(acc)
         }
-        filtered.add(Triple(uid, nick, email))
+        filtered.add(Acc(uid, nick, email, pass))
         val out = filtered.joinToString("\u0002") {
-            "${it.first}\u0001${it.second}\u0001${it.third}"
+            "${it.uid}\u0001${it.nick}\u0001${it.email}\u0001${it.pass}"
         }
         prefs.edit().putString("accounts", out).apply()
     }
 
-    private fun loadAccounts(): List<Triple<String, String, String>> {
+    private fun loadAccounts(): List<Acc> {
         val prefs = getSharedPreferences("ahem", Context.MODE_PRIVATE)
         val raw = prefs.getString("accounts", "") ?: ""
-        val list = ArrayList<Triple<String, String, String>>()
+        val list = ArrayList<Acc>()
         for (rec in raw.split("\u0002")) {
             if (rec.isEmpty()) continue
             val parts = rec.split("\u0001")
-            if (parts.size == 3) list.add(Triple(parts[0], parts[1], parts[2]))
+            if (parts.size == 4) list.add(Acc(parts[0], parts[1], parts[2], parts[3]))
         }
         return list
     }
 
-    // ================= ЛАЙКИ =================
+    private fun followUser(targetUid: String, targetNick: String) {
+        if (targetUid.isEmpty() || targetUid == currentUserId) return
+        if (targetNick == currentNick) return
+        val now = System.currentTimeMillis()
+        val f = database.child("following").child(currentUserId).child(targetUid)
+        f.child("nick").setValue(targetNick)
+        f.child("ts").setValue(now)
+        val fr = database.child("followers").child(targetUid).child(currentUserId)
+        fr.child("nick").setValue(currentNick)
+        fr.child("ts").setValue(now)
+        Toast.makeText(this, "Подписаны на $targetNick", Toast.LENGTH_SHORT).show()
+        if (::profileRoot.isInitialized) refreshProfile()
+    }
+
+    private fun followByNick(nick: String) {
+        val n = nick.trim()
+        if (n.isEmpty()) return
+        if (n.equals(currentNick, ignoreCase = true)) {
+            Toast.makeText(this, "Нельзя подписаться на себя", Toast.LENGTH_SHORT).show()
+            return
+        }
+        database.child("users").addListenerForSingleValueEvent(object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                var foundUid = ""
+                for (u in snapshot.children) {
+                    val un = u.child("nick").getValue(String::class.java) ?: ""
+                    if (un.equals(n, ignoreCase = true)) {
+                        foundUid = u.key ?: ""
+                        break
+                    }
+                }
+                if (foundUid.isEmpty()) {
+                    Toast.makeText(this@MainActivity, "Пользователь не найден", Toast.LENGTH_SHORT).show()
+                } else {
+                    followUser(foundUid, n)
+                }
+            }
+            override fun onCancelled(error: DatabaseError) {}
+        })
+    }
+
     private fun heartSet(iv: ImageView, liked: Boolean) {
         iv.setImageResource(if (liked) R.drawable.ic_heart else R.drawable.ic_heart_outline)
         iv.setColorFilter(if (liked) P.heartOn else P.textSec)
@@ -473,7 +501,6 @@ class MainActivity : Activity() {
         }
     }
 
-    // ================= ПРОСМОТРЫ (1 на пользователя, серверная транзакция) =================
     private fun incrementViews(postId: String, onDone: ((Long) -> Unit)?) {
         if (currentUserId.isEmpty()) return
         if (postId in viewedLocally) return
@@ -526,7 +553,6 @@ class MainActivity : Activity() {
         })
     }
 
-    // ================= СОЗДАНИЕ =================
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         applyTheme(isDark())
@@ -591,7 +617,6 @@ class MainActivity : Activity() {
                             currentNick = snapshot.child("nick").getValue(String::class.java) ?: "Аноним"
                             currentAvatar = snapshot.child("avatar").getValue(String::class.java) ?: ""
                             currentEmail = snapshot.child("email").getValue(String::class.java) ?: (auth.currentUser?.email ?: "")
-                            saveAccount(currentUserId, currentNick, currentEmail)
                             if (::feedBlock.isInitialized && feedBlock.visibility == View.GONE) enterFeedMode()
                             if (::profileRoot.isInitialized) refreshProfile()
                         }
@@ -602,6 +627,8 @@ class MainActivity : Activity() {
                 currentNick = ""
                 currentEmail = ""
                 currentAvatar = ""
+                viewingUserId = ""
+                viewingNick = ""
                 if (::feedBlock.isInitialized) {
                     feedBlock.visibility = View.GONE
                     authBlock.visibility = View.VISIBLE
@@ -629,7 +656,6 @@ class MainActivity : Activity() {
         }
     }
 
-    // ================= ЛЕНТА =================
     private fun buildFeed(): View {
         val col = LinearLayout(this)
         col.orientation = LinearLayout.VERTICAL
@@ -678,7 +704,6 @@ class MainActivity : Activity() {
         feedBlock.visibility = View.GONE
         feedBlock.setBackgroundColor(P.bg)
 
-        // Верх ленты: ТОЛЬКО лого (ник и карандаш убраны)
         val top = LinearLayout(this)
         top.orientation = LinearLayout.HORIZONTAL
         top.gravity = Gravity.CENTER_VERTICAL
@@ -726,9 +751,10 @@ class MainActivity : Activity() {
         cRow.gravity = Gravity.CENTER_VERTICAL
         val camIv = iconRound(R.drawable.ic_camera, P.text, dp(44))
         val pubBtn = btnAccent("Опубликовать")
-        pubBtn.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
+        val pubLp = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT)
+        pubLp.marginStart = dp(10)
+        pubBtn.layoutParams = pubLp
         wt(pubBtn, 1f)
-        (pubBtn.layoutParams as LinearLayout.LayoutParams).marginStart = dp(10)
         cRow.addView(camIv)
         cRow.addView(pubBtn)
 
@@ -746,13 +772,15 @@ class MainActivity : Activity() {
         feedBtn.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
         wt(feedBtn, 1f)
         feedFollowNick = field("@ник")
-        feedFollowNick.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
+        val ffLp = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT)
+        ffLp.marginStart = dp(8)
+        feedFollowNick.layoutParams = ffLp
         wt(feedFollowNick, 2f)
-        (feedFollowNick.layoutParams as LinearLayout.LayoutParams).marginStart = dp(8)
         val folBtn = btnOutline("Подписаться")
-        folBtn.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
+        val folLp = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT)
+        folLp.marginStart = dp(8)
+        folBtn.layoutParams = folLp
         wt(folBtn, 1f)
-        (folBtn.layoutParams as LinearLayout.LayoutParams).marginStart = dp(8)
         rowAct.addView(feedBtn)
         rowAct.addView(feedFollowNick)
         rowAct.addView(folBtn)
@@ -785,14 +813,21 @@ class MainActivity : Activity() {
             }
             isRegistering = true
             regBtn.text = "..."
+            val restore = Runnable {
+                isRegistering = false
+                regBtn.text = "Регистрация"
+            }
+            uiHandler.postDelayed(restore, 15000)
             isNickTaken(nick, "") { taken ->
                 if (taken) {
+                    uiHandler.removeCallbacks(restore)
                     feedStatus.text = "Ник уже занят"
                     isRegistering = false
                     regBtn.text = "Регистрация"
                     return@isNickTaken
                 }
                 auth.createUserWithEmailAndPassword(email, pass).addOnCompleteListener { task ->
+                    uiHandler.removeCallbacks(restore)
                     if (task.isSuccessful) {
                         val userId = auth.currentUser?.uid ?: return@addOnCompleteListener
                         database.child("users").child(userId).child("email").setValue(email)
@@ -801,7 +836,7 @@ class MainActivity : Activity() {
                         currentNick = nick
                         currentEmail = email
                         viewingUserId = currentUserId
-                        saveAccount(userId, nick, email)
+                        saveAccount(userId, nick, email, pass)
                         feedStatus.text = "Зарегистрирован!"
                         enterFeedMode()
                     } else {
@@ -823,7 +858,13 @@ class MainActivity : Activity() {
             }
             isLoggingIn = true
             logBtn.text = "..."
+            val restore = Runnable {
+                isLoggingIn = false
+                logBtn.text = "Вход"
+            }
+            uiHandler.postDelayed(restore, 15000)
             auth.signInWithEmailAndPassword(email, pass).addOnCompleteListener { task ->
+                uiHandler.removeCallbacks(restore)
                 if (task.isSuccessful) {
                     val userId = auth.currentUser?.uid ?: return@addOnCompleteListener
                     currentUserId = userId
@@ -833,7 +874,7 @@ class MainActivity : Activity() {
                         override fun onDataChange(snapshot: DataSnapshot) {
                             currentNick = snapshot.child("nick").getValue(String::class.java) ?: "Аноним"
                             currentAvatar = snapshot.child("avatar").getValue(String::class.java) ?: ""
-                            saveAccount(userId, currentNick, email)
+                            saveAccount(userId, currentNick, email, pass)
                             enterFeedMode()
                         }
                         override fun onCancelled(error: DatabaseError) {}
@@ -881,12 +922,8 @@ class MainActivity : Activity() {
         feedBtn.setOnClickListener { loadFeed() }
 
         folBtn.setOnClickListener {
-            val n = feedFollowNick.text.toString().trim()
-            if (n.isNotEmpty()) {
-                addKnown(n)
-                feedFollowNick.setText("")
-                Toast.makeText(this, "Подписаны на $n", Toast.LENGTH_SHORT).show()
-            }
+            followByNick(feedFollowNick.text.toString())
+            feedFollowNick.setText("")
         }
 
         col.addView(authBlock)
@@ -905,7 +942,6 @@ class MainActivity : Activity() {
         feedBox.removeAllViews()
         lastFeedSig = ""
 
-        // ФИКС ленты: читаем children напрямую (без orderByChild) и сортируем на клиенте
         feedListener = database.child("posts").addValueEventListener(object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
                 val posts = ArrayList<DataSnapshot>()
@@ -928,7 +964,6 @@ class MainActivity : Activity() {
                     try {
                         feedBox.addView(buildPostCard(post))
                     } catch (e: Exception) {
-                        // пропускаем проблемный пост
                     }
                 }
                 if (posts.isEmpty()) feedBox.addView(tv("Лента пуста", 15f, fMed, P.textSec))
@@ -939,7 +974,6 @@ class MainActivity : Activity() {
         })
     }
 
-    // ================= ЕДИНАЯ КАРТОЧКА ПОСТА (лента + детальное окно) =================
     private fun buildPostCard(post: DataSnapshot): View {
         val postId = post.key ?: ""
         val authorId = post.child("authorId").getValue(String::class.java) ?: ""
@@ -1055,9 +1089,10 @@ class MainActivity : Activity() {
                             val b = decodeScaled(images[idx], cell)
                             if (b != null) {
                                 val box = FrameLayout(this)
-                                box.layoutParams = lp(0, cell, 0)
-                                wt(box, 1f)
-                                (box.layoutParams as LinearLayout.LayoutParams).marginEnd = if (ci == 0) dp(4) else 0
+                                val boxLp = LinearLayout.LayoutParams(0, cell)
+                                boxLp.weight = 1f
+                                if (ci == 0) boxLp.marginEnd = dp(4)
+                                box.layoutParams = boxLp
                                 box.background = surf(12, filled = true)
                                 box.clipToOutline = true
                                 val iv = ImageView(this)
@@ -1070,16 +1105,18 @@ class MainActivity : Activity() {
                                 row.addView(box)
                             } else {
                                 val empty = View(this)
-                                empty.layoutParams = lp(0, cell, 0)
-                                wt(empty, 1f)
-                                (empty.layoutParams as LinearLayout.LayoutParams).marginEnd = if (ci == 0) dp(4) else 0
+                                val eLp = LinearLayout.LayoutParams(0, cell)
+                                eLp.weight = 1f
+                                if (ci == 0) eLp.marginEnd = dp(4)
+                                empty.layoutParams = eLp
                                 row.addView(empty)
                             }
                         } else {
                             val empty = View(this)
-                            empty.layoutParams = lp(0, cell, 0)
-                            wt(empty, 1f)
-                            (empty.layoutParams as LinearLayout.LayoutParams).marginEnd = if (ci == 0) dp(4) else 0
+                            val eLp = LinearLayout.LayoutParams(0, cell)
+                            eLp.weight = 1f
+                            if (ci == 0) eLp.marginEnd = dp(4)
+                            empty.layoutParams = eLp
                             row.addView(empty)
                         }
                     }
@@ -1097,7 +1134,9 @@ class MainActivity : Activity() {
 
         val heartIv = icon(R.drawable.ic_heart_outline, P.textSec, dp(22))
         val countTv = tv("♥ " + fmtNum(likeCount), 14f, fSemi, P.text)
-        (countTv.layoutParams as LinearLayout.LayoutParams).marginStart = dp(6)
+        val countLp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+        countLp.marginStart = dp(6)
+        countTv.layoutParams = countLp
         val likeBox = LinearLayout(this)
         likeBox.orientation = LinearLayout.HORIZONTAL
         likeBox.gravity = Gravity.CENTER_VERTICAL
@@ -1109,12 +1148,16 @@ class MainActivity : Activity() {
 
         val eyeIv = icon(R.drawable.ic_eye, P.textSec, dp(20))
         val viewsTv = tv(fmtNum(viewCount), 13f, fMed, P.textSec)
-        (viewsTv.layoutParams as LinearLayout.LayoutParams).marginStart = dp(6)
-        (viewsTv.layoutParams as LinearLayout.LayoutParams).marginEnd = dp(6)
+        val viewsTvLp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+        viewsTvLp.marginStart = dp(6)
+        viewsTvLp.marginEnd = dp(6)
+        viewsTv.layoutParams = viewsTvLp
         val viewsBox = LinearLayout(this)
         viewsBox.orientation = LinearLayout.HORIZONTAL
         viewsBox.gravity = Gravity.CENTER_VERTICAL
-        (viewsBox.layoutParams as LinearLayout.LayoutParams).marginStart = dp(16)
+        val viewsBoxLp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+        viewsBoxLp.marginStart = dp(16)
+        viewsBox.layoutParams = viewsBoxLp
         viewsBox.addView(eyeIv)
         viewsBox.addView(viewsTv)
         act.addView(viewsBox)
@@ -1122,15 +1165,16 @@ class MainActivity : Activity() {
         if (authorId != currentUserId && authorId.isNotEmpty()) {
             val fb = btnOutline("+ @$authorNick")
             fb.textSize = 12f
-            (fb.layoutParams as LinearLayout.LayoutParams).marginStart = dp(12)
-            fb.setOnClickListener { addKnown(authorNick) }
+            val fbLp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+            fbLp.marginStart = dp(12)
+            fb.layoutParams = fbLp
+            fb.setOnClickListener { followUser(authorId, authorNick) }
             act.addView(fb)
         }
         card.addView(act)
         return card
     }
 
-    // ================= ДЕТАЛЬНОЕ ОКНО ПОСТА =================
     private fun openPostDetail(post: DataSnapshot) {
         val postId = post.key ?: ""
         incrementViews(postId, null)
@@ -1146,9 +1190,10 @@ class MainActivity : Activity() {
         val backIv = iconRound(R.drawable.ic_back, P.text, dp(38))
         backIv.setOnClickListener { dlg.dismiss() }
         val title = tv("Пост", 17f, fBold, P.text)
-        title.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
-        wt(title, 1f)
-        (title.layoutParams as LinearLayout.LayoutParams).marginStart = dp(12)
+        val titleLp = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT)
+        titleLp.weight = 1f
+        titleLp.marginStart = dp(12)
+        title.layoutParams = titleLp
         bar.addView(backIv)
         bar.addView(title)
         outer.addView(bar)
@@ -1178,6 +1223,84 @@ class MainActivity : Activity() {
         viewingNick = nick
         profileMode = 0
         showTab(3)
+    }
+
+    private fun openFollowList(targetUid: String, followers: Boolean) {
+        if (targetUid.isEmpty()) return
+        val dlg = Dialog(this, android.R.style.Theme_Black_NoTitleBar)
+        val outer = LinearLayout(this)
+        outer.orientation = LinearLayout.VERTICAL
+        outer.setBackgroundColor(P.bg)
+
+        val bar = LinearLayout(this)
+        bar.orientation = LinearLayout.HORIZONTAL
+        bar.gravity = Gravity.CENTER_VERTICAL
+        bar.setPadding(dp(8), dp(10), dp(14), dp(10))
+        val backIv = iconRound(R.drawable.ic_back, P.text, dp(38))
+        backIv.setOnClickListener { dlg.dismiss() }
+        val title = tv(if (followers) "Подписчики" else "Подписки", 18f, fBold, P.text)
+        val titleLp = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT)
+        titleLp.weight = 1f
+        titleLp.marginStart = dp(12)
+        title.layoutParams = titleLp
+        bar.addView(backIv)
+        bar.addView(title)
+        outer.addView(bar)
+
+        val scroll = ScrollView(this)
+        scroll.isVerticalScrollBarEnabled = false
+        val list = LinearLayout(this)
+        list.orientation = LinearLayout.VERTICAL
+        list.setPadding(dp(14), dp(6), dp(14), dp(20))
+        scroll.addView(list)
+        val slp = LinearLayout.LayoutParams(-1, 0)
+        slp.weight = 1f
+        outer.addView(scroll, slp)
+
+        val node = if (followers) "followers" else "following"
+        database.child(node).child(targetUid).addListenerForSingleValueEvent(object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                list.removeAllViews()
+                val cnt = snapshot.children.count()
+                title.text = (if (followers) "Подписчики " else "Подписки ") + cnt
+                if (cnt == 0) {
+                    val empty = tv("Пусто", 14f, fMed, P.textSec)
+                    empty.setPadding(dp(4), dp(20), dp(4), dp(20))
+                    list.addView(empty)
+                    return
+                }
+                for (child in snapshot.children) {
+                    val uid = child.key ?: ""
+                    val nick = child.child("nick").getValue(String::class.java) ?: "?"
+                    if (uid.isEmpty()) continue
+                    val row = LinearLayout(this@MainActivity)
+                    row.orientation = LinearLayout.HORIZONTAL
+                    row.gravity = Gravity.CENTER_VERTICAL
+                    row.background = surf(14, filled = true)
+                    val rl = LinearLayout.LayoutParams(-1, LinearLayout.LayoutParams.WRAP_CONTENT)
+                    rl.bottomMargin = dp(6)
+                    row.layoutParams = rl
+                    row.setPadding(dp(12), dp(10), dp(12), dp(10))
+                    row.addView(avatarView(null, dp(40), nick))
+                    val nt = tv("@$nick", 15f, fSemi, P.text)
+                    val ntLp = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT)
+                    ntLp.weight = 1f
+                    ntLp.marginStart = dp(12)
+                    nt.layoutParams = ntLp
+                    row.addView(nt)
+                    row.setOnClickListener {
+                        dlg.dismiss()
+                        openUserProfile(uid, nick)
+                    }
+                    list.addView(row)
+                }
+            }
+            override fun onCancelled(error: DatabaseError) {}
+        })
+
+        dlg.setContentView(outer)
+        dlg.window?.setLayout(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+        dlg.show()
     }
 
     private fun openViewer(images: List<String>, start: Int) {
@@ -1328,7 +1451,6 @@ class MainActivity : Activity() {
         show()
     }
 
-    // ================= ЧАТЫ =================
     private fun buildChats(): View {
         val col = LinearLayout(this)
         col.orientation = LinearLayout.VERTICAL
@@ -1348,9 +1470,10 @@ class MainActivity : Activity() {
         searchField.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
         wt(searchField, 2f)
         val searchIv = iconRound(R.drawable.ic_search, P.text, dp(46))
-        searchIv.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
-        wt(searchIv, 1f)
-        (searchIv.layoutParams as LinearLayout.LayoutParams).marginStart = dp(8)
+        val siLp = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT)
+        siLp.weight = 1f
+        siLp.marginStart = dp(8)
+        searchIv.layoutParams = siLp
         rowSearch.addView(searchField)
         rowSearch.addView(searchIv)
         searchResults = LinearLayout(this)
@@ -1379,9 +1502,10 @@ class MainActivity : Activity() {
         top.layoutParams = lp(-1, -2, 0)
         val backIv = iconRound(R.drawable.ic_back, P.text, dp(38))
         convTitle = tv("", 17f, fSemi, P.text)
-        convTitle.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
-        wt(convTitle, 1f)
-        (convTitle.layoutParams as LinearLayout.LayoutParams).marginStart = dp(12)
+        val ctLp = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT)
+        ctLp.weight = 1f
+        ctLp.marginStart = dp(12)
+        convTitle.layoutParams = ctLp
         top.addView(backIv)
         top.addView(convTitle)
         convBox = LinearLayout(this)
@@ -1404,7 +1528,9 @@ class MainActivity : Activity() {
         inputRow.layoutParams = lp(-1, -2, dp(10))
         msgField.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
         wt(msgField, 1f)
-        (sendIv.layoutParams as LinearLayout.LayoutParams).marginStart = dp(8)
+        val sendLp = LinearLayout.LayoutParams(dp(46), dp(46))
+        sendLp.marginStart = dp(8)
+        sendIv.layoutParams = sendLp
         inputRow.addView(msgField)
         inputRow.addView(sendIv)
         convRoot.addView(top)
@@ -1428,7 +1554,10 @@ class MainActivity : Activity() {
                             row.setPadding(dp(12), dp(10), dp(12), dp(10))
                             row.addView(avatarView(null, dp(34), nick))
                             val nt = tv(nick, 15f, fMed, P.text)
-                            (nt.layoutParams as LinearLayout.LayoutParams).marginStart = dp(12)
+                            val ntLp = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT)
+                            ntLp.weight = 1f
+                            ntLp.marginStart = dp(12)
+                            nt.layoutParams = ntLp
                             row.addView(nt)
                             row.setOnClickListener { openChat(u.key ?: "", nick); searchResults.removeAllViews() }
                             searchResults.addView(row)
@@ -1509,7 +1638,6 @@ class MainActivity : Activity() {
             })
     }
 
-    // ================= ВИДЕО =================
     private fun buildVideo(): View {
         val col = LinearLayout(this)
         col.orientation = LinearLayout.VERTICAL
@@ -1533,7 +1661,6 @@ class MainActivity : Activity() {
         return col
     }
 
-    // ================= ПРОФИЛЬ =================
     private fun buildProfile(): View {
         profileRoot = LinearLayout(this)
         profileRoot.orientation = LinearLayout.VERTICAL
@@ -1555,7 +1682,9 @@ class MainActivity : Activity() {
         profileSettingsIv = iconRound(R.drawable.ic_settings, P.text, dp(38))
         profileSettingsIv.setOnClickListener { showSettingsDialog() }
         profileEditIv = iconRound(R.drawable.ic_edit, P.text, dp(38))
-        (profileEditIv.layoutParams as LinearLayout.LayoutParams).marginStart = dp(8)
+        val peLp = LinearLayout.LayoutParams(dp(38), dp(38))
+        peLp.marginStart = dp(8)
+        profileEditIv.layoutParams = peLp
         nickRow.addView(profileNick)
         nickRow.addView(profileSettingsIv)
         nickRow.addView(profileEditIv)
@@ -1566,8 +1695,9 @@ class MainActivity : Activity() {
         infoRow.gravity = Gravity.CENTER_VERTICAL
         infoRow.layoutParams = lp(-1, -2, dp(16))
         profileAvatar = ImageView(this)
-        profileAvatar.layoutParams = lp(dp(84), dp(84), 0)
-        (profileAvatar.layoutParams as LinearLayout.LayoutParams).marginEnd = dp(20)
+        val paLp = LinearLayout.LayoutParams(dp(84), dp(84))
+        paLp.marginEnd = dp(20)
+        profileAvatar.layoutParams = paLp
         profileAvatar.scaleType = ImageView.ScaleType.FIT_CENTER
         profilePostsCount = TextView(this)
         profileFollowersCount = TextView(this)
@@ -1579,6 +1709,13 @@ class MainActivity : Activity() {
         infoRow.addView(statCol(profileFollowingCount, "подписки"))
         infoRow.addView(statCol(profileLikesCount, "лайки"))
         content.addView(infoRow)
+
+        profileFollowersCount.setOnClickListener {
+            if (currentProfileTargetId.isNotEmpty()) openFollowList(currentProfileTargetId, true)
+        }
+        profileFollowingCount.setOnClickListener {
+            if (currentProfileTargetId.isNotEmpty()) openFollowList(currentProfileTargetId, false)
+        }
 
         profileName = tv("", 15f, fSemi, P.text)
         profileName.layoutParams = lp(-1, -2, dp(2))
@@ -1639,6 +1776,7 @@ class MainActivity : Activity() {
         num.textSize = 18f
         num.typeface = fBold
         num.setTextColor(P.text)
+        num.isClickable = true
         val l = tv(label, 11f, fReg, P.textSec)
         l.gravity = Gravity.CENTER
         c.addView(num)
@@ -1646,7 +1784,6 @@ class MainActivity : Activity() {
         return c
     }
 
-    // ================= НАСТРОЙКИ (тема + аккаунт) =================
     private fun showSettingsDialog() {
         val dlg = Dialog(this)
         dlg.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
@@ -1705,6 +1842,8 @@ class MainActivity : Activity() {
         logout.layoutParams = lp(-1, -2, 0)
         logout.setOnClickListener {
             dlg.dismiss()
+            viewingUserId = ""
+            viewingNick = ""
             auth.signOut()
             showTab(0)
         }
@@ -1750,38 +1889,37 @@ class MainActivity : Activity() {
                 val row = LinearLayout(this)
                 row.orientation = LinearLayout.HORIZONTAL
                 row.gravity = Gravity.CENTER_VERTICAL
-                row.background = if (acc.first == currentUserId) surf(12, filled = true) else surf(12, filled = false)
+                row.background = if (acc.uid == currentUserId) surf(12, filled = true) else surf(12, filled = false)
                 row.setPadding(dp(14), dp(12), dp(14), dp(12))
                 row.layoutParams = lp(-1, -2, dp(6))
-                row.addView(avatarView(null, dp(36), acc.second))
+                row.addView(avatarView(null, dp(36), acc.nick))
                 val box = LinearLayout(this)
                 box.orientation = LinearLayout.VERTICAL
                 val bp = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT)
                 bp.weight = 1f
                 bp.marginStart = dp(12)
                 box.layoutParams = bp
-                box.addView(tv(acc.second, 15f, fSemi, P.text))
-                box.addView(tv(acc.third, 12f, fReg, P.textSec))
+                box.addView(tv(acc.nick, 15f, fSemi, P.text))
+                box.addView(tv(acc.email, 12f, fReg, P.textSec))
                 row.addView(box)
-                if (acc.first == currentUserId) {
-                    val cur = tv("сейчас", 11f, fMed, P.textSec)
-                    row.addView(cur)
+                if (acc.uid == currentUserId) {
+                    row.addView(tv("сейчас", 11f, fMed, P.textSec))
                 }
-                val targetEmail = acc.third
                 row.setOnClickListener {
                     dlg.dismiss()
-                    switchToAccount(targetEmail)
+                    switchToAccount(acc)
                 }
                 root.addView(row)
             }
         }
 
         val addBtn = btnAccent("Добавить аккаунт")
-        addBtn.layoutParams = lp(-1, -2, 0)
-        (addBtn.layoutParams as LinearLayout.LayoutParams).topMargin = dp(8)
+        val addLp = LinearLayout.LayoutParams(-1, LinearLayout.LayoutParams.WRAP_CONTENT)
+        addLp.topMargin = dp(8)
+        addBtn.layoutParams = addLp
         addBtn.setOnClickListener {
             dlg.dismiss()
-            switchToAccount("")
+            switchToManual()
         }
         root.addView(addBtn)
 
@@ -1790,8 +1928,39 @@ class MainActivity : Activity() {
         dlg.show()
     }
 
-    private fun switchToAccount(email: String) {
-        auth.signOut()
+    private fun switchToAccount(acc: Acc) {
+        viewingUserId = ""
+        viewingNick = ""
+        currentUserId = ""
+        currentNick = ""
+        currentEmail = ""
+        currentAvatar = ""
+        showTab(0)
+        feedBlock.visibility = View.GONE
+        authBlock.visibility = View.VISIBLE
+        isLoggingIn = true
+        logBtn.text = "..."
+        val restore = Runnable {
+            isLoggingIn = false
+            logBtn.text = "Вход"
+        }
+        uiHandler.postDelayed(restore, 15000)
+        auth.signInWithEmailAndPassword(acc.email, acc.pass).addOnCompleteListener { task ->
+            uiHandler.removeCallbacks(restore)
+            isLoggingIn = false
+            logBtn.text = "Вход"
+            if (!task.isSuccessful) {
+                feedEmail.setText(acc.email)
+                feedNick.setText("")
+                feedPass.setText("")
+                feedStatus.text = "Введите пароль для ${acc.email}"
+            }
+        }
+    }
+
+    private fun switchToManual() {
+        viewingUserId = ""
+        viewingNick = ""
         currentUserId = ""
         currentNick = ""
         currentEmail = ""
@@ -1800,10 +1969,9 @@ class MainActivity : Activity() {
         feedBlock.visibility = View.GONE
         authBlock.visibility = View.VISIBLE
         feedStatus.text = "вход / регистрация"
-        feedEmail.setText(email)
+        feedEmail.setText("")
         feedNick.setText("")
         feedPass.setText("")
-        feedPass.requestFocus()
     }
 
     private fun themeOption(label: String, selected: Boolean): LinearLayout {
@@ -1909,7 +2077,7 @@ class MainActivity : Activity() {
                 if (newNick != currentNick) {
                     database.child("users").child(currentUserId).child("nick").setValue(newNick)
                     currentNick = newNick
-                    saveAccount(currentUserId, newNick, currentEmail)
+                    saveAccount(currentUserId, newNick, currentEmail, feedPass.text.toString())
                     updatePostsNick(newNick)
                 }
                 database.child("users").child(currentUserId).child("bio").setValue(newBio)
@@ -1932,8 +2100,23 @@ class MainActivity : Activity() {
     private fun refreshProfile() {
         if (!::profileRoot.isInitialized) return
         val targetId = if (viewingUserId.isNotEmpty()) viewingUserId else currentUserId
+        currentProfileTargetId = targetId
         profileTabPosts.setColorFilter(if (profileMode == 0) P.text else P.navInactive)
         profileTabLikes.setColorFilter(if (profileMode == 1) P.accent else P.navInactive)
+
+        database.child("followers").child(targetId).addListenerForSingleValueEvent(object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                profileFollowersCount.text = fmtNum(snapshot.children.count().toLong())
+            }
+            override fun onCancelled(error: DatabaseError) {}
+        })
+        database.child("following").child(targetId).addListenerForSingleValueEvent(object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                profileFollowingCount.text = fmtNum(snapshot.children.count().toLong())
+            }
+            override fun onCancelled(error: DatabaseError) {}
+        })
+
         database.child("users").child(targetId).addListenerForSingleValueEvent(object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
                 val nick = snapshot.child("nick").getValue(String::class.java) ?: "?"
@@ -1944,7 +2127,6 @@ class MainActivity : Activity() {
                 profileNick.text = "@$nick"
                 profileName.text = nick
                 profileBio.text = bio
-                profileFollowingCount.text = fmtNum(knownNames.size.toLong())
                 if (targetId == currentUserId) {
                     profileBtn1.text = "Редактировать профиль"
                     profileBtn1.setOnClickListener { showEditProfileDialog() }
@@ -1978,7 +2160,6 @@ class MainActivity : Activity() {
                             if (profileMode == 1 && liked) grid.add(p)
                         }
                         profilePostsCount.text = fmtNum(ownCount)
-                        profileFollowersCount.text = "0"
                         profileLikesCount.text = fmtNum(sumLikes)
                         profilePostsGrid.removeAllViews()
                         if (grid.isEmpty()) {
@@ -2037,7 +2218,6 @@ class MainActivity : Activity() {
                                         val cntHidden = tv("♥ " + fmtNum(lc), 12f, fSemi, P.text)
                                         attachLike(heartQuick, cntHidden, heartQuick, postId, currentUserId in likedBy)
                                     } catch (e: Exception) {
-                                        // пропускаем ячейку
                                     }
                                 }
                                 row.addView(box)
@@ -2053,7 +2233,6 @@ class MainActivity : Activity() {
         })
     }
 
-    // ================= ВЫБОР ФОТО =================
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (resultCode != RESULT_OK || data == null) return
@@ -2089,7 +2268,6 @@ class MainActivity : Activity() {
                         pendingImages.add(Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP))
                     }
                 } catch (e: Exception) {
-                    // пропускаем битое фото
                 }
             }
             if (pendingImages.isNotEmpty()) {
@@ -2138,7 +2316,6 @@ class MainActivity : Activity() {
                     editAvatarView?.setImageBitmap(makeCircularBitmap(scaled, dp(96)))
                 }
             } catch (e: Exception) {
-                // не падаем при ошибке чтения аватара
             }
         }
     }
