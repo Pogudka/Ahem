@@ -213,7 +213,19 @@ internal fun openFollowList(act: MainActivity, targetUid: String, followers: Boo
                     rl.bottomMargin = act.dp(6)
                     row.layoutParams = rl
                     row.setPadding(act.dp(12), act.dp(10), act.dp(12), act.dp(10))
-                    row.addView(avatarView(act, null, act.dp(40), nick))
+                    val av = avatarView(act, null, act.dp(40), nick)
+                    row.addView(av)
+                    act.database.child("users").child(uid).child("avatar")
+                        .addListenerForSingleValueEvent(object : ValueEventListener {
+                            override fun onDataChange(as2: DataSnapshot) {
+                                val s = as2.getValue(String::class.java) ?: ""
+                                if (s.isNotEmpty()) {
+                                    val b = decodeScaled(s, act.dp(40))
+                                    if (b != null) av.setImageBitmap(makeCircularBitmap(b, act.dp(40)))
+                                }
+                            }
+                            override fun onCancelled(error: DatabaseError) {}
+                        })
                     val nt = tv(act, "@$nick", 15f, act.fSemi, P.text)
                     val ntLp = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT)
                     ntLp.weight = 1f
@@ -556,8 +568,6 @@ internal fun showEditProfileDialog(act: MainActivity) {
 
 internal fun refreshProfile(act: MainActivity) {
     act.profileGen += 1
-    val gen = act.profileGen
-
     act.profileNick.text = "@"
     act.profileName.text = ""
     act.profileBio.text = ""
@@ -567,10 +577,13 @@ internal fun refreshProfile(act: MainActivity) {
     act.profileFollowingCount.text = "0"
     act.profilePostsGrid.removeAllViews()
     act.profileAvatar.setImageBitmap(makeCircularBitmap(createAvatarBitmap(act, ""), act.dp(84)))
-
     act.profileTabPosts.setColorFilter(if (act.profileMode == 0) P.text else P.navInactive)
     act.profileTabLikes.setColorFilter(if (act.profileMode == 1) P.accent else P.navInactive)
+    migrateStats(act) { refreshProfileData(act) }
+}
 
+internal fun refreshProfileData(act: MainActivity) {
+    val gen = act.profileGen
     val targetId = if (act.viewingUserId.isNotEmpty()) act.viewingUserId else act.currentUserId
     act.currentProfileTargetId = targetId
     if (targetId.isEmpty()) return
@@ -698,8 +711,9 @@ internal fun refreshProfile(act: MainActivity) {
                                     }
                                     box.setOnClickListener { openPostDetail(act, p) }
                                     val liked = act.statsMap[postId]?.child("likedBy")?.child(act.currentUserId)?.value != null
-                                    val heartQuick = icon(act, R.drawable.ic_heart_outline, P.textSec, act.dp(18))
-                                    val hp = FrameLayout.LayoutParams(act.dp(18), act.dp(18))
+                                    val heartQuick = icon(act, R.drawable.ic_heart_outline, P.textSec, act.dp(26))
+                                    heartQuick.setPadding(act.dp(4), act.dp(4), act.dp(4), act.dp(4))
+                                    val hp = FrameLayout.LayoutParams(act.dp(26), act.dp(26))
                                     hp.gravity = Gravity.TOP or Gravity.END
                                     hp.setMargins(0, act.dp(6), act.dp(6), 0)
                                     box.addView(heartQuick, hp)
