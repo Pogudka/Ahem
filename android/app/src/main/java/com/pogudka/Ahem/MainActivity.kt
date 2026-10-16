@@ -264,7 +264,7 @@ class MainActivity : Activity() {
         convBox.setPadding(0, 0, 0, dp(8))
         chatListRows.setPadding(0, 0, 0, navSpace)
 
-        glass.attach(window, contentFrame, navWrap)
+        glass.attach(contentFrame, navWrap)
         hookGlassScroll()
         pumpGlass()
 
