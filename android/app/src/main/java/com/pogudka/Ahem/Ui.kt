@@ -9,7 +9,6 @@ import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
 import android.widget.EditText
 import android.widget.ImageView
-import android.widget.LinearLayout
 import android.widget.TextView
 
 internal fun createAvatarBitmap(act: MainActivity, nick: String): Bitmap {
@@ -110,8 +109,21 @@ internal fun icon(act: MainActivity, res: Int, tint: Int, size: Int): ImageView 
 }
 
 internal fun iconRound(act: MainActivity, res: Int, tint: Int, size: Int): ImageView {
-    val iv = icon(act, res, tint, size)
+    val iv = ImageView(act)
+    iv.setImageResource(res)
+    iv.setColorFilter(tint)
+    iv.layoutParams = act.lp(size, size, 0)
     iv.setPadding(act.dp(9), act.dp(9), act.dp(9), act.dp(9))
-    iv.background = surf(act, 20, filled = false)
+    val g = GlassDrawable()
+    g.setRadius(size / 2f)
+    g.setBlurRadius(act.dp(10).toFloat())
+    g.setGlassTint(P.navGlass)
+    g.setBorder(P.border, act.dp(1).toFloat())
+    iv.background = g
+    if (::act.rootFrame.isInitializedSafe()) {
+        g.attach(act.rootFrame, iv)
+    }
     return iv
 }
+
+private fun ::MainActivity.rootFrame.isInitializedSafe(): Boolean = true
