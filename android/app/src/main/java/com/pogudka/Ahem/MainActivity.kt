@@ -34,6 +34,7 @@ class MainActivity : Activity() {
     internal lateinit var auth: FirebaseAuth
     internal lateinit var database: DatabaseReference
     internal lateinit var rootFrame: FrameLayout
+    internal lateinit var contentFrame: FrameLayout
     internal lateinit var navWrap: FrameLayout
 
     private lateinit var tabs: Array<View>
@@ -88,8 +89,11 @@ class MainActivity : Activity() {
     internal var currentChatOtherNick = ""
     internal var convListener: ValueEventListener? = null
     internal var convListener2: ValueEventListener? = null
+    internal var convLegacyListeners: ArrayList<ValueEventListener>? = null
+    internal var convLegacyRefs: ArrayList<DatabaseReference>? = null
     internal var chatSnapMine: DataSnapshot? = null
     internal var chatSnapPeer: DataSnapshot? = null
+    internal var chatLegacySnaps: HashMap<String, DataSnapshot> = HashMap()
 
     internal lateinit var profileRoot: LinearLayout
     internal lateinit var profileAvatar: ImageView
@@ -213,6 +217,7 @@ class MainActivity : Activity() {
 
         val content = FrameLayout(this)
         content.layoutParams = FrameLayout.LayoutParams(-1, -1)
+        contentFrame = content
 
         val feedTab = buildFeed(this)
         val videoTab = buildVideo(this)
@@ -264,7 +269,7 @@ class MainActivity : Activity() {
         convBox.setPadding(0, 0, 0, dp(8))
         chatListRows.setPadding(0, 0, 0, navSpace)
 
-        glass.attach(window, navWrap)
+        glass.attach(contentFrame, navWrap)
         hookGlassScroll()
         pumpGlass()
 
@@ -329,6 +334,9 @@ class MainActivity : Activity() {
         ptrAnimator?.cancel()
         convListener?.let { database.child("conversations").child(currentUserId).removeEventListener(it) }
         convListener2?.let { database.child("conversations").removeEventListener(it) }
+        convLegacyRefs?.let { refs ->
+            convLegacyListeners?.forEachIndexed { i, lv -> refs.getOrNull(i)?.removeEventListener(lv) }
+        }
     }
 
     internal fun showTab(i: Int, keep: Boolean = false) {
