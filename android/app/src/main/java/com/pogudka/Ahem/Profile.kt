@@ -437,9 +437,13 @@ internal fun switchToAccount(act: MainActivity, acc: Acc) {
             })
         } else {
             act.feedEmail.setText(acc.email)
-            act.feedNick.setText("")
-            act.feedPass.setText("")
-            act.feedStatus.text = "Введите пароль для ${acc.email}"
+            if (isAuthNetworkError(task.exception)) {
+                act.feedStatus.text = authErrorText(task.exception)
+            } else {
+                act.feedNick.setText("")
+                act.feedPass.setText("")
+                act.feedStatus.text = "Введите пароль для ${acc.email}"
+            }
         }
     }
 }
