@@ -119,6 +119,7 @@ class MainActivity : Activity() {
     internal val viewedLocally = HashSet<String>()
     internal val statsMap = HashMap<String, DataSnapshot>()
     internal val myFollowingIds = HashSet<String>()
+    internal val viewsTvMap = HashMap<String, ArrayList<TextView>>()
 
     internal val fBold: Typeface by lazy { ResourcesCompat.getFont(this, R.font.unbounded)!! }
     internal val fSemi: Typeface by lazy { ResourcesCompat.getFont(this, R.font.ubuntu_medium)!! }
@@ -223,6 +224,7 @@ class MainActivity : Activity() {
                 imageCache.clear()
                 avatarCache.clear()
                 mediaCache.clear()
+                viewsTvMap.clear()
                 if (::feedBlock.isInitialized) {
                     feedBlock.visibility = View.GONE
                     authBlock.visibility = View.VISIBLE
