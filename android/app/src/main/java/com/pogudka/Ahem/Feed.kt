@@ -4,6 +4,8 @@ import android.animation.ObjectAnimator
 import android.app.Dialog
 import android.content.Intent
 import android.graphics.Bitmap
+import android.text.Editable
+import android.text.TextWatcher
 import android.text.util.Linkify
 import android.view.GestureDetector
 import android.view.Gravity
@@ -12,20 +14,37 @@ import android.view.ScaleGestureDetector
 import android.view.View
 import android.view.animation.LinearInterpolator
 import android.widget.Button
-import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
-import android.widget.Toast
 import com.google.firebase.database.DataSnapshot
 import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.ValueEventListener
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+
+internal fun mediaFor(act: MainActivity, postId: String, cb: (String) -> Unit) {
+    act.mediaCache[postId]?.let { cb(it); return }
+    act.database.child("postMedia").child(postId).addListenerForSingleValueEvent(object : ValueEventListener {
+        override fun onDataChange(snapshot: DataSnapshot) {
+            val str = snapshot.getValue(String::class.java) ?: ""
+            if (str.isNotEmpty()) act.mediaCache[postId] = str
+            cb(str)
+        }
+        override fun onCancelled(error: DatabaseError) { cb("") }
+    })
+}
+
+internal fun openViewerByPost(act: MainActivity, postId: String, start: Int) {
+    mediaFor(act, postId) { str ->
+        val images = str.split(",").filter { it.isNotEmpty() }
+        if (images.isNotEmpty()) openViewer(act, images, start)
+    }
+}
 
 internal fun buildFeed(act: MainActivity): View {
     val col = LinearLayout(act)
@@ -133,23 +152,31 @@ internal fun buildFeed(act: MainActivity): View {
     composer.addView(act.pendingWrap)
     composer.addView(cRow)
 
-    val rowAct = LinearLayout(act)
-    rowAct.orientation = LinearLayout.HORIZONTAL
-    rowAct.gravity = Gravity.CENTER_VERTICAL
+    val searchRow = LinearLayout(act)
+    searchRow.orientation = LinearLayout.HORIZONTAL
+    searchRow.gravity = Gravity.CENTER_VERTICAL
     val raM = LinearLayout.LayoutParams(-1, -2)
     raM.setMargins(act.dp(14), 0, act.dp(14), act.dp(12))
-    rowAct.layoutParams = raM
-    act.feedFollowNick = field(act, "@ник")
-    val ffLp = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT)
-    act.feedFollowNick.layoutParams = ffLp
-    act.wt(act.feedFollowNick, 2f)
-    val folBtn = btnOutline(act, "Подписаться")
-    val folLp = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT)
-    folLp.marginStart = act.dp(8)
-    folBtn.layoutParams = folLp
-    act.wt(folBtn, 1f)
-    rowAct.addView(act.feedFollowNick)
-    rowAct.addView(folBtn)
+    searchRow.layoutParams = raM
+    act.feedSearch = field(act, "Поиск: текст или @ник")
+    act.feedSearch.layoutParams = act.lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
+    act.wt(act.feedSearch, 1f)
+    val searchClear = iconRound(act, R.drawable.ic_close, P.textSec, act.dp(36))
+    (searchClear.layoutParams as LinearLayout.LayoutParams).marginStart = act.dp(8)
+    searchRow.addView(act.feedSearch)
+    searchRow.addView(searchClear)
+
+    act.feedSearch.addTextChangedListener(object : TextWatcher {
+        override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+        override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+        override fun afterTextChanged(s: Editable?) {
+            act.feedQuery = s?.toString()?.trim() ?: ""
+            renderFeed(act)
+        }
+    })
+    searchClear.setOnClickListener {
+        act.feedSearch.setText("")
+    }
 
     act.feedScroll = ScrollView(act)
     act.feedScroll.isVerticalScrollBarEnabled = false
@@ -182,7 +209,7 @@ internal fun buildFeed(act: MainActivity): View {
 
     act.feedBlock.addView(top)
     act.feedBlock.addView(composer)
-    act.feedBlock.addView(rowAct)
+    act.feedBlock.addView(searchRow)
     act.feedBlock.addView(act.feedScroll)
 
     act.regBtn.setOnClickListener {
@@ -298,9 +325,11 @@ internal fun buildFeed(act: MainActivity): View {
         post["authorId"] = act.currentUserId
         post["authorNick"] = act.currentNick
         post["text"] = text
-        post["images"] = act.pendingImages.joinToString(",")
         post["timestamp"] = System.currentTimeMillis()
         act.database.child("posts").child(postId).setValue(post)
+        if (act.pendingImages.isNotEmpty()) {
+            act.database.child("postMedia").child(postId).setValue(act.pendingImages.joinToString(","))
+        }
         val stats = HashMap<String, Any>()
         stats["likes"] = 0
         stats["views"] = 0
@@ -311,11 +340,6 @@ internal fun buildFeed(act: MainActivity): View {
         act.pendingImages.clear()
         act.pendingWrap.visibility = View.GONE
         loadFeed(act)
-    }
-
-    folBtn.setOnClickListener {
-        followByNick(act, act.feedFollowNick.text.toString())
-        act.feedFollowNick.setText("")
     }
 
     col.addView(act.authBlock)
@@ -392,42 +416,66 @@ internal fun collapsePtr(act: MainActivity) {
 internal fun enterFeedMode(act: MainActivity) {
     act.authBlock.visibility = View.GONE
     act.feedBlock.visibility = View.VISIBLE
-    loadFeed(act)
+    migrateStats(act) { loadFeed(act) }
 }
 
 internal fun loadFeed(act: MainActivity, onDone: (() -> Unit)? = null) {
-    act.feedBox.removeAllViews()
+    act.feedGen += 1
+    val gen = act.feedGen
     act.statsMap.clear()
-    val postsRef = act.database.child("posts")
-    val statsRef = act.database.child("postStats")
     var postsSnap: DataSnapshot? = null
     var statsSnap: DataSnapshot? = null
     var done = false
     fun finish() {
+        if (gen != act.feedGen) return
         if (done) return
         done = true
         if (statsSnap != null) for (s in statsSnap!!.children) s.key?.let { act.statsMap[it] = s }
-        act.feedBox.removeAllViews()
-        val list = ArrayList<DataSnapshot>()
-        if (postsSnap != null) for (c in postsSnap!!.children) list.add(c)
-        val sorted = list.sortedByDescending { getTs(it) }.take(act.FEED_LIMIT)
-        for (post in sorted) {
-            try {
-                act.feedBox.addView(buildPostCard(act, post))
-            } catch (e: Exception) {
-            }
-        }
-        if (list.isEmpty()) act.feedBox.addView(tv(act, "Лента пуста", 15f, act.fMed, P.textSec))
+        act.lastPosts.clear()
+        if (postsSnap != null) for (c in postsSnap!!.children) act.lastPosts.add(c)
+        renderFeed(act)
         onDone?.invoke()
     }
-    postsRef.addListenerForSingleValueEvent(object : ValueEventListener {
+    act.database.child("posts").addListenerForSingleValueEvent(object : ValueEventListener {
         override fun onDataChange(snapshot: DataSnapshot) { postsSnap = snapshot; finish() }
-        override fun onCancelled(error: DatabaseError) { postsSnap = null; finish() }
+        override fun onCancelled(error: DatabaseError) {
+            postsSnap = null
+            dbDenied(act, error)
+            finish()
+        }
     })
-    statsRef.addListenerForSingleValueEvent(object : ValueEventListener {
+    act.database.child("postStats").addListenerForSingleValueEvent(object : ValueEventListener {
         override fun onDataChange(snapshot: DataSnapshot) { statsSnap = snapshot; finish() }
-        override fun onCancelled(error: DatabaseError) { statsSnap = null; finish() }
+        override fun onCancelled(error: DatabaseError) {
+            statsSnap = null
+            dbDenied(act, error)
+            finish()
+        }
     })
+}
+
+internal fun renderFeed(act: MainActivity) {
+    act.feedBox.removeAllViews()
+    val q = act.feedQuery.lowercase()
+    val sorted = act.lastPosts.sortedByDescending { getTs(it) }
+    var shown = 0
+    for (post in sorted) {
+        if (shown >= act.FEED_LIMIT) break
+        if (q.isNotEmpty()) {
+            val text = (post.child("text").getValue(String::class.java) ?: "").lowercase()
+            val nick = (post.child("authorNick").getValue(String::class.java) ?: "").lowercase()
+            val qq = q.removePrefix("@")
+            if (!text.contains(qq) && !nick.contains(qq)) continue
+        }
+        try {
+            act.feedBox.addView(buildPostCard(act, post))
+            shown++
+        } catch (e: Exception) {
+        }
+    }
+    if (shown == 0) {
+        act.feedBox.addView(tv(act, if (q.isEmpty()) "Лента пуста" else "Ничего не найдено", 15f, act.fMed, P.textSec))
+    }
 }
 
 internal fun buildPostCard(act: MainActivity, post: DataSnapshot, onViewsReady: ((TextView) -> Unit)? = null): View {
@@ -435,7 +483,6 @@ internal fun buildPostCard(act: MainActivity, post: DataSnapshot, onViewsReady: 
     val authorId = post.child("authorId").getValue(String::class.java) ?: ""
     val authorNick = post.child("authorNick").getValue(String::class.java) ?: "?"
     val text = post.child("text").getValue(String::class.java) ?: ""
-    val imagesStr = post.child("images").getValue(String::class.java) ?: ""
     val ts = getTs(post)
     val stats = act.statsMap[postId]
     val likeCount = (stats?.child("likes")?.value as? Number)?.toLong() ?: 0L
@@ -510,78 +557,15 @@ internal fun buildPostCard(act: MainActivity, post: DataSnapshot, onViewsReady: 
         card.addView(bt)
     }
 
-    if (imagesStr.isNotEmpty()) {
-        val images = imagesStr.split(",").filter { it.isNotEmpty() }
-        if (images.size == 1) {
-            val b = decodeScaled(images[0], imgW)
-            if (b != null) {
-                val box = FrameLayout(act)
-                val bm = LinearLayout.LayoutParams(-1, imgW)
-                bm.setMargins(act.dp(14), 0, act.dp(14), act.dp(12))
-                box.layoutParams = bm
-                box.background = surf(act, 14, filled = true)
-                box.clipToOutline = true
-                val iv = ImageView(act)
-                iv.setImageBitmap(b)
-                iv.scaleType = ImageView.ScaleType.CENTER_CROP
-                iv.layoutParams = FrameLayout.LayoutParams(-1, -1)
-                iv.setOnClickListener { openViewer(act, images, 0) }
-                box.addView(iv)
-                card.addView(box)
-            }
-        } else {
-            val grid = LinearLayout(act)
-            grid.orientation = LinearLayout.VERTICAL
-            val gm = LinearLayout.LayoutParams(-1, LinearLayout.LayoutParams.WRAP_CONTENT)
-            gm.setMargins(act.dp(14), 0, act.dp(14), act.dp(12))
-            grid.layoutParams = gm
-            val cell = (imgW - act.dp(4)) / 2
-            var ri = 0
-            while (ri < images.size) {
-                val row = LinearLayout(act)
-                row.orientation = LinearLayout.HORIZONTAL
-                row.layoutParams = act.lp(-1, LinearLayout.LayoutParams.WRAP_CONTENT, act.dp(4))
-                for (ci in 0 until 2) {
-                    val idx = ri + ci
-                    if (idx < images.size) {
-                        val b = decodeScaled(images[idx], cell)
-                        if (b != null) {
-                            val box = FrameLayout(act)
-                            val boxLp = LinearLayout.LayoutParams(0, cell)
-                            boxLp.weight = 1f
-                            if (ci == 0) boxLp.marginEnd = act.dp(4)
-                            box.layoutParams = boxLp
-                            box.background = surf(act, 12, filled = true)
-                            box.clipToOutline = true
-                            val iv = ImageView(act)
-                            iv.setImageBitmap(b)
-                            iv.scaleType = ImageView.ScaleType.CENTER_CROP
-                            iv.layoutParams = FrameLayout.LayoutParams(-1, -1)
-                            val kk = idx
-                            iv.setOnClickListener { openViewer(act, images, kk) }
-                            box.addView(iv)
-                            row.addView(box)
-                        } else {
-                            val empty = View(act)
-                            val eLp = LinearLayout.LayoutParams(0, cell)
-                            eLp.weight = 1f
-                            if (ci == 0) eLp.marginEnd = act.dp(4)
-                            empty.layoutParams = eLp
-                            row.addView(empty)
-                        }
-                    } else {
-                        val empty = View(act)
-                        val eLp = LinearLayout.LayoutParams(0, cell)
-                        eLp.weight = 1f
-                        if (ci == 0) eLp.marginEnd = act.dp(4)
-                        empty.layoutParams = eLp
-                        row.addView(empty)
-                    }
-                }
-                grid.addView(row)
-                ri += 2
-            }
-            card.addView(grid)
+    val mediaContainer = LinearLayout(act)
+    mediaContainer.orientation = LinearLayout.VERTICAL
+    val mcLp = LinearLayout.LayoutParams(-1, LinearLayout.LayoutParams.WRAP_CONTENT)
+    mediaContainer.layoutParams = mcLp
+    card.addView(mediaContainer)
+    mediaFor(act, postId) { str ->
+        try {
+            fillMedia(act, mediaContainer, str, postId, imgW)
+        } catch (e: Exception) {
         }
     }
 
@@ -625,12 +609,90 @@ internal fun buildPostCard(act: MainActivity, post: DataSnapshot, onViewsReady: 
         val fbLp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
         fbLp.marginStart = act.dp(12)
         fb.layoutParams = fbLp
-        fb.setOnClickListener { followUser(act, authorId, authorNick); actRow.removeView(fb) }
+        fb.setOnClickListener { followUser(act, authorId, authorNick); renderFeed(act) }
         actRow.addView(fb)
     }
     card.addView(actRow)
     onViewsReady?.invoke(viewsTv)
     return card
+}
+
+internal fun fillMedia(act: MainActivity, container: LinearLayout, imagesStr: String, postId: String, imgW: Int) {
+    container.removeAllViews()
+    if (imagesStr.isEmpty()) return
+    val images = imagesStr.split(",").filter { it.isNotEmpty() }
+    if (images.isEmpty()) return
+    if (images.size == 1) {
+        val b = decodeCached(act, images[0], imgW, "fb$postId")
+        if (b != null) {
+            val box = FrameLayout(act)
+            val bm = LinearLayout.LayoutParams(-1, imgW)
+            bm.setMargins(act.dp(14), 0, act.dp(14), act.dp(12))
+            box.layoutParams = bm
+            box.background = surf(act, 14, filled = true)
+            box.clipToOutline = true
+            val iv = ImageView(act)
+            iv.setImageBitmap(b)
+            iv.scaleType = ImageView.ScaleType.CENTER_CROP
+            iv.layoutParams = FrameLayout.LayoutParams(-1, -1)
+            iv.setOnClickListener { openViewer(act, images, 0) }
+            box.addView(iv)
+            container.addView(box)
+        }
+    } else {
+        val grid = LinearLayout(act)
+        grid.orientation = LinearLayout.VERTICAL
+        val gm = LinearLayout.LayoutParams(-1, LinearLayout.LayoutParams.WRAP_CONTENT)
+        gm.setMargins(act.dp(14), 0, act.dp(14), act.dp(12))
+        grid.layoutParams = gm
+        val cell = (imgW - act.dp(4)) / 2
+        var ri = 0
+        while (ri < images.size) {
+            val row = LinearLayout(act)
+            row.orientation = LinearLayout.HORIZONTAL
+            row.layoutParams = act.lp(-1, LinearLayout.LayoutParams.WRAP_CONTENT, act.dp(4))
+            for (ci in 0 until 2) {
+                val idx = ri + ci
+                if (idx < images.size) {
+                    val b = decodeCached(act, images[idx], cell, "fg${postId}_$idx")
+                    if (b != null) {
+                        val box = FrameLayout(act)
+                        val boxLp = LinearLayout.LayoutParams(0, cell)
+                        boxLp.weight = 1f
+                        if (ci == 0) boxLp.marginEnd = act.dp(4)
+                        box.layoutParams = boxLp
+                        box.background = surf(act, 12, filled = true)
+                        box.clipToOutline = true
+                        val iv = ImageView(act)
+                        iv.setImageBitmap(b)
+                        iv.scaleType = ImageView.ScaleType.CENTER_CROP
+                        iv.layoutParams = FrameLayout.LayoutParams(-1, -1)
+                        val kk = idx
+                        iv.setOnClickListener { openViewer(act, images, kk) }
+                        box.addView(iv)
+                        row.addView(box)
+                    } else {
+                        val empty = View(act)
+                        val eLp = LinearLayout.LayoutParams(0, cell)
+                        eLp.weight = 1f
+                        if (ci == 0) eLp.marginEnd = act.dp(4)
+                        empty.layoutParams = eLp
+                        row.addView(empty)
+                    }
+                } else {
+                    val empty = View(act)
+                    val eLp = LinearLayout.LayoutParams(0, cell)
+                    eLp.weight = 1f
+                    if (ci == 0) eLp.marginEnd = act.dp(4)
+                    empty.layoutParams = eLp
+                    row.addView(empty)
+                }
+            }
+            grid.addView(row)
+            ri += 2
+        }
+        container.addView(grid)
+    }
 }
 
 internal fun openPostDetail(act: MainActivity, post: DataSnapshot) {
