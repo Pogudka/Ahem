@@ -4,11 +4,9 @@ import android.view.Gravity
 import android.view.View
 import android.widget.EditText
 import android.widget.FrameLayout
-import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
-import android.widget.Toast
 import com.google.firebase.database.DataSnapshot
 import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.ValueEventListener
@@ -104,7 +102,7 @@ internal fun buildChats(act: MainActivity): View {
     inputBar.gravity = Gravity.CENTER_VERTICAL
     val ibg = GlassDrawable()
     ibg.setRadius(act.dp(26).toFloat())
-    ibg.setBlurRadius(act.dp(22).toFloat())
+    ibg.setBlurLevel(3)
     ibg.setGlassTint(P.navGlass)
     ibg.setBorder(P.border, act.dp(1).toFloat())
     inputBar.background = ibg
@@ -185,6 +183,7 @@ internal fun renderConversation(act: MainActivity, snapshot: DataSnapshot) {
     for (c in snapshot.children) list.add(c)
     list.sortBy { getTs(it) }
     val df = SimpleDateFormat("HH:mm", Locale.getDefault())
+    val maxW = (act.resources.displayMetrics.widthPixels * 0.78).toInt()
     for (m in list) {
         val text = m.child("text").getValue(String::class.java) ?: ""
         val ts = getTs(m)
@@ -204,27 +203,26 @@ internal fun renderConversation(act: MainActivity, snapshot: DataSnapshot) {
         val bubble = LinearLayout(act)
         bubble.orientation = LinearLayout.VERTICAL
         bubble.background = if (mine) accentBg(act, 18) else surf(act, 18, filled = true)
-        val blp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-        blp.width = 0
-        blp.weight = 0f
-        val maxW = (act.resources.displayMetrics.widthPixels * 0.78).toInt()
-        bubble.maximumWidth = maxW
+        val blp = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        )
         bubble.setPadding(act.dp(14), act.dp(10), act.dp(14), act.dp(8))
         val tvMsg = TextView(act)
         tvMsg.text = text
         tvMsg.textSize = 15f
         tvMsg.typeface = act.fReg
         tvMsg.setTextColor(if (mine) P.accentText else P.text)
+        tvMsg.maxWidth = maxW
         bubble.addView(tvMsg)
         val tvTime = TextView(act)
         tvTime.text = df.format(Date(ts))
         tvTime.textSize = 10f
         tvTime.typeface = act.fReg
         tvTime.gravity = if (mine) Gravity.END else Gravity.START
-        tvTime.setTextColor(if (mine) 0x99FFFFFF else P.textSec)
+        tvTime.setTextColor(if (mine) 0x99FFFFFF.toInt() else P.textSec)
         bubble.addView(tvTime)
-        val wrapLp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-        row.addView(bubble, wrapLp)
+        row.addView(bubble, blp)
         if (!mine) {
             val sp = View(act)
             val splp = LinearLayout.LayoutParams(0, 1)
@@ -286,9 +284,9 @@ internal fun loadConversations(act: MainActivity) {
                     row.orientation = LinearLayout.HORIZONTAL
                     row.gravity = Gravity.CENTER_VERTICAL
                     row.background = surf(act, 16, filled = true)
-                    val rl = LinearLayout.LayoutParams(-1, LinearLayout.LayoutParams.WRAP_CONTENT)
-                    rl.bottomMargin = act.dp(8)
-                    row.layoutParams = rl
+                    val rlp = LinearLayout.LayoutParams(-1, LinearLayout.LayoutParams.WRAP_CONTENT)
+                    rlp.bottomMargin = act.dp(8)
+                    row.layoutParams = rlp
                     row.setPadding(act.dp(12), act.dp(12), act.dp(12), act.dp(12))
                     row.addView(avatarView(act, null, act.dp(48), nick))
                     val box = LinearLayout(act)
