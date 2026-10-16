@@ -255,7 +255,7 @@ internal fun buildFeed(act: MainActivity): View {
                     enterFeedMode(act)
                     loadMyFollowing(act) { renderFeed(act) }
                 } else {
-                    act.feedStatus.text = "Ошибка: ${task.exception?.message}"
+                    act.feedStatus.text = authErrorText(task.exception)
                 }
                 act.isRegistering = false
                 act.regBtn.text = "Регистрация"
@@ -298,7 +298,7 @@ internal fun buildFeed(act: MainActivity): View {
                     override fun onCancelled(error: DatabaseError) { dbDenied(act, error) }
                 })
             } else {
-                act.feedStatus.text = "Ошибка: ${task.exception?.message}"
+                act.feedStatus.text = authErrorText(task.exception)
             }
             act.isLoggingIn = false
             act.logBtn.text = "Вход"
