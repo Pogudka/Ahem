@@ -9,7 +9,6 @@ import android.graphics.Paint
 import android.graphics.Shader
 import android.util.Base64
 import android.widget.TextView
-import android.widget.Toast
 import com.google.firebase.database.DataSnapshot
 import com.google.firebase.database.DatabaseError
 
@@ -61,8 +60,9 @@ internal fun applyTheme(ctx: Context, dark: Boolean) {
 internal fun isDark(ctx: Context): Boolean =
     ctx.getSharedPreferences("ahem", Context.MODE_PRIVATE).getBoolean("dark", false)
 
+// тихий: технические всплывашки убраны по просьбе, ошибки БД больше не тукаем
 internal fun dbDenied(act: MainActivity, error: DatabaseError) {
-    Toast.makeText(act, "Ошибка БД: " + error.message, Toast.LENGTH_LONG).show()
+    // no-op
 }
 
 internal fun trimNum(d: Double): String {
