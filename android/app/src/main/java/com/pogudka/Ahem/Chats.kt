@@ -15,45 +15,57 @@ import java.util.Date
 import java.util.Locale
 
 private fun msgText(m: DataSnapshot): String {
-    val keys = arrayOf("text", "message", "body", "content")
-    for (k in keys) {
+    val known = arrayOf("text", "message", "body", "content", "msg", "m", "value", "val")
+    for (k in known) {
         val v = m.child(k).getValue(String::class.java)
         if (!v.isNullOrEmpty()) return v
     }
+    for (c in m.children) {
+        val v = c.value
+        if (v is String && v.isNotEmpty()) return v
+    }
+    val direct = m.value
+    if (direct is String && direct.isNotEmpty()) return direct
     return ""
 }
 
 private fun msgTs(m: DataSnapshot): Long {
-    val keys = arrayOf("ts", "timestamp", "time", "createdAt", "created", "date")
-    for (k in keys) {
+    val known = arrayOf("ts", "timestamp", "time", "createdAt", "created", "date", "at", "sentAt")
+    for (k in known) {
         val v = m.child(k).value
         if (v is Number) return v.toLong()
         val s = (v as? String)?.toLongOrNull()
         if (s != null) return s
     }
+    for (c in m.children) {
+        val v = c.value
+        if (v is Number && v.toLong() > 1_000_000_000_000L) return v.toLong()
+        val s = (v as? String)?.toLongOrNull()
+        if (s != null && s > 1_000_000_000_000L) return s
+    }
     return 0L
 }
 
 private fun msgNick(m: DataSnapshot): String {
-    val keys = arrayOf("nick", "senderNick", "authorNick", "fromNick")
-    for (k in keys) {
+    val known = arrayOf("nick", "senderNick", "authorNick", "fromNick", "name", "user")
+    for (k in known) {
         val v = m.child(k).getValue(String::class.java)
         if (!v.isNullOrEmpty()) return v
     }
     return ""
 }
 
-// ориентация строго по отправителю; без инверсии по ящику (она ломала старые записи)
 private fun msgMine(m: DataSnapshot, myUid: String, boxIsMine: Boolean): Boolean {
-    val su = m.child("senderUid").getValue(String::class.java)
-        ?: m.child("from").getValue(String::class.java)
-        ?: m.child("uid").getValue(String::class.java)
-        ?: m.child("sender").getValue(String::class.java)
-        ?: m.child("author").getValue(String::class.java)
-        ?: ""
-    if (su.isNotEmpty()) return su == myUid
-    val mine = m.child("mine").getValue(Boolean::class.java)
-    if (mine != null) return mine
+    val uidKeys = arrayOf("senderUid", "from", "uid", "sender", "author", "userId", "owner", "by")
+    for (k in uidKeys) {
+        val v = m.child(k).getValue(String::class.java) ?: ""
+        if (v.isNotEmpty()) return v == myUid
+    }
+    val boolKeys = arrayOf("mine", "isMine", "self", "own")
+    for (k in boolKeys) {
+        val v = m.child(k).getValue(Boolean::class.java)
+        if (v != null) return v
+    }
     return boxIsMine
 }
 
@@ -177,7 +189,7 @@ internal fun buildChats(act: MainActivity): View {
     tab.addView(act.chatListRoot, FrameLayout.LayoutParams(-1, -1))
     tab.addView(act.convRoot, FrameLayout.LayoutParams(-1, -1))
 
-    ibg.attach(act.rootFrame, inputBar)
+    ibg.attach(act.window, inputBar)
 
     return tab
 }
