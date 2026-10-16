@@ -33,6 +33,8 @@ class MainActivity : Activity() {
 
     internal lateinit var auth: FirebaseAuth
     internal lateinit var database: DatabaseReference
+    internal lateinit var rootFrame: FrameLayout
+    internal lateinit var navWrap: FrameLayout
 
     private lateinit var tabs: Array<View>
     private lateinit var navIcons: Array<ImageView>
@@ -154,6 +156,12 @@ class MainActivity : Activity() {
         }
     }
 
+    internal fun setNavVisible(v: Boolean) {
+        if (!::navWrap.isInitialized) return
+        navWrap.visibility = if (v) View.VISIBLE else View.GONE
+        glassNav?.requestRefresh()
+    }
+
     internal fun saveSessionPrefs() {
         getSharedPreferences("ahem", Context.MODE_PRIVATE).edit()
             .putString("last_uid", currentUserId)
@@ -182,6 +190,7 @@ class MainActivity : Activity() {
 
         val root = FrameLayout(this)
         root.setBackgroundColor(P.bg)
+        rootFrame = root
 
         val content = FrameLayout(this)
         content.layoutParams = FrameLayout.LayoutParams(-1, -1)
@@ -193,7 +202,7 @@ class MainActivity : Activity() {
         tabs = arrayOf(feedTab, videoTab, chatTab, profTab)
         for (t in tabs) content.addView(t, FrameLayout.LayoutParams(-1, -1))
 
-        val navWrap = FrameLayout(this)
+        navWrap = FrameLayout(this)
         val nwp = FrameLayout.LayoutParams(-1, -2)
         nwp.gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
         nwp.setMargins(dp(16), 0, dp(16), dp(12))
@@ -201,6 +210,7 @@ class MainActivity : Activity() {
 
         val glass = GlassDrawable()
         glass.setRadius(dp(28).toFloat())
+        glass.setBlurRadius(dp(26).toFloat())
         glass.setGlassTint(P.navGlass)
         glass.setBorder(P.border, dp(1).toFloat())
         glassNav = glass
@@ -231,7 +241,7 @@ class MainActivity : Activity() {
         val navSpace = dp(96)
         feedBox.setPadding(0, 0, 0, navSpace)
         profilePostsGrid.setPadding(0, 0, 0, navSpace)
-        convBox.setPadding(0, 0, 0, navSpace)
+        convBox.setPadding(0, 0, 0, dp(8))
         chatListRows.setPadding(0, 0, 0, navSpace)
 
         glass.attach(root, navWrap)
@@ -314,6 +324,7 @@ class MainActivity : Activity() {
     internal fun showTab(i: Int, keep: Boolean = false) {
         for (idx in tabs.indices) tabs[idx].visibility = if (idx == i) View.VISIBLE else View.GONE
         for (idx in 0 until 4) navIcons[idx].setColorFilter(if (idx == i) P.accent else P.navInactive)
+        setNavVisible(true)
         glassNav?.requestRefresh()
         if (i == 3) {
             if (!keep) {
