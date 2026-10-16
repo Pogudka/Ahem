@@ -755,17 +755,12 @@ internal fun applyProfileButtons(act: MainActivity, targetId: String, nick: Stri
 }
 
 internal fun loadProfileGrid(act: MainActivity, gen: Int, targetId: String) {
-    val postsRef = act.database.child("posts")
-    val statsRef = act.database.child("postStats")
     var psSnap: DataSnapshot? = null
-    var stSnap: DataSnapshot? = null
-    var done = false
+    var postsDone = false
+    var statsDone = false
     fun finish() {
         if (gen != act.profileGen) return
-        if (done) return
-        done = true
-        act.statsMap.clear()
-        if (stSnap != null) for (s in stSnap!!.children) s.key?.let { act.statsMap[it] = s }
+        if (!postsDone || !statsDone) return
         var ownCount = 0L
         var sumLikes = 0L
         val grid = ArrayList<DataSnapshot>()
@@ -788,19 +783,13 @@ internal fun loadProfileGrid(act: MainActivity, gen: Int, targetId: String) {
         act.profileLikesCount.text = fmtNum(sumLikes)
         renderGrid(act, grid)
     }
-    postsRef.addListenerForSingleValueEvent(object : ValueEventListener {
-        override fun onDataChange(snapshot: DataSnapshot) { psSnap = snapshot; finish() }
-        override fun onCancelled(error: DatabaseError) {
-            psSnap = null
-            dbDenied(act, error)
-            val key = "$targetId|${act.profileMode}"
-            act.gridCache[key]?.let { renderGrid(act, it) }
-        }
-    })
-    statsRef.addListenerForSingleValueEvent(object : ValueEventListener {
-        override fun onDataChange(snapshot: DataSnapshot) { stSnap = snapshot; finish() }
-        override fun onCancelled(error: DatabaseError) { stSnap = null; finish() }
-    })
+    readOnce(act.database.child("posts"), act, 3,
+        { s -> psSnap = s; postsDone = true; finish() },
+        { psSnap = null; postsDone = true; finish() })
+    readStatsInto(act) {
+        statsDone = true
+        finish()
+    }
 }
 
 internal fun scheduleMigration(act: MainActivity) {
