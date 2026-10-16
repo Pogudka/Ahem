@@ -64,7 +64,9 @@ private fun msgNick(m: DataSnapshot): String = try {
     r
 } catch (e: Exception) { "" }
 
-private fun msgMine(m: DataSnapshot, myUid: String): Boolean {
+// ориентация: 1) senderUid однозначен; 2) поле mine; 3) ФОЛБЭК по ящику-источнику
+// (без него старые записи без отправителя все липнут влево — это и был регресс)
+private fun msgMine(m: DataSnapshot, myUid: String, boxIsMine: Boolean): Boolean {
     return try {
         val uidKeys = arrayOf("senderUid", "from", "uid", "sender", "author", "userId", "owner", "by")
         var res: Boolean? = null
@@ -79,8 +81,8 @@ private fun msgMine(m: DataSnapshot, myUid: String): Boolean {
                 if (v != null) { res = v; break }
             }
         }
-        res ?: false
-    } catch (e: Exception) { false }
+        res ?: boxIsMine
+    } catch (e: Exception) { boxIsMine }
 }
 
 internal fun buildChats(act: MainActivity): View {
@@ -172,7 +174,6 @@ internal fun buildChats(act: MainActivity): View {
     val ibg = GlassDrawable()
     ibg.setLiveBlur(true)
     ibg.setRadius(act.dp(26).toFloat())
-    ibg.setBlurRadius(act.dp(18).toFloat())
     ibg.setGlassTint(P.navGlass)
     ibg.setBorder(P.border, act.dp(1).toFloat())
     inputBar.background = ibg
@@ -277,18 +278,18 @@ internal fun openChat(act: MainActivity, peerUid: String, peerNick: String) {
 private fun renderMergedChat(act: MainActivity) {
     val items = ArrayList<Pair<DataSnapshot, Boolean>>()
     val seen = HashSet<String>()
-    fun add(s: DataSnapshot?) {
+    fun add(s: DataSnapshot?, boxIsMine: Boolean) {
         if (s == null) return
         for (c in s.children) {
             val key = msgTs(c).toString() + "|" + msgText(c)
             if (key in seen) continue
             seen.add(key)
-            items.add(Pair(c, msgMine(c, act.currentUserId)))
+            items.add(Pair(c, msgMine(c, act.currentUserId, boxIsMine)))
         }
     }
-    add(act.chatSnapMine)
-    add(act.chatSnapPeer)
-    add(act.chatSnapFlat)
+    add(act.chatSnapMine, true)    // свой ящик => по умолчанию мои
+    add(act.chatSnapPeer, false)   // зеркало => по умолчанию чужие
+    add(act.chatSnapFlat, false)   // старый плоский узел => по умолчанию чужие (мои там имеют senderUid)
     items.sortBy { msgTs(it.first) }
     renderConversation(act, items)
 }
@@ -297,6 +298,14 @@ internal fun renderConversation(act: MainActivity, items: List<Pair<DataSnapshot
     act.convBox.removeAllViews()
     val df = SimpleDateFormat("HH:mm", Locale.getDefault())
     val maxW = (act.resources.displayMetrics.widthPixels * 0.78).toInt()
+
+    // spacer сверху, чтобы короткие диалоги прижимались к низу, как в мессенджерах
+    val topSpacer = View(act)
+    val tsp = LinearLayout.LayoutParams(-1, 0)
+    tsp.weight = 1f
+    topSpacer.layoutParams = tsp
+    act.convBox.addView(topSpacer)
+
     var drawn = 0
     for ((m, mine) in items) {
         val text = msgText(m)
@@ -351,7 +360,7 @@ internal fun renderConversation(act: MainActivity, items: List<Pair<DataSnapshot
     if (drawn == 0 && act.chatSnapMine != null && act.chatSnapPeer != null && act.chatSnapFlat != null) {
         val empty = tv(act, "Нет сообщений", 14f, act.fMed, P.textSec)
         empty.gravity = Gravity.CENTER
-        empty.setPadding(0, act.dp(40), 0, act.dp(40))
+        empty.setPadding(0, act.dp(20), 0, act.dp(20))
         act.convBox.addView(empty)
     }
     act.convScroll.post { act.convScroll.fullScroll(View.FOCUS_DOWN) }
@@ -366,21 +375,28 @@ internal fun sendMessage(act: MainActivity) {
     val peer = act.currentChat
     val base = act.database.child("conversations")
 
+    val payload = HashMap<String, Any>()
+    payload["text"] = text
+    payload["message"] = text
+    payload["body"] = text
+    payload["ts"] = now
+    payload["timestamp"] = now
+    payload["createdAt"] = now
+    payload["senderUid"] = me
+    payload["uid"] = me
+    payload["from"] = me
+    payload["nick"] = act.currentNick
+
     val k1 = base.child(me).child(peer).push().key ?: return
-    val m1 = HashMap<String, Any>()
-    m1["text"] = text; m1["message"] = text; m1["body"] = text
-    m1["ts"] = now; m1["timestamp"] = now; m1["createdAt"] = now
-    m1["senderUid"] = me; m1["uid"] = me; m1["from"] = me
-    m1["mine"] = true; m1["nick"] = act.currentNick
+    val m1 = HashMap(payload); m1["mine"] = true
     base.child(me).child(peer).child(k1).setValue(m1)
 
     val k2 = base.child(peer).child(me).push().key ?: return
-    val m2 = HashMap<String, Any>(m1)
-    m2["mine"] = false
+    val m2 = HashMap(payload); m2["mine"] = false
     base.child(peer).child(me).child(k2).setValue(m2)
 
     val k3 = base.child(peer).push().key ?: return
-    val m3 = HashMap<String, Any>(m1)
+    val m3 = HashMap(payload); m3["mine"] = true
     base.child(peer).child(k3).setValue(m3)
 
     act.msgField.setText("")
@@ -412,7 +428,7 @@ internal fun loadConversations(act: MainActivity) {
 }
 
 private fun loadConvRows(act: MainActivity, nickMap: HashMap<String, String>, avatarMap: HashMap<String, String>) {
-    // ЧИТАЕМ СВОЙ УЗЕЛ, не корень: conversations/<me> -> дети = peerUid
+    // читаем ТОЛЬКО свой узел conversations/<me>; корень conversations не трогаем (правила БД его режут)
     act.database.child("conversations").child(act.currentUserId).addListenerForSingleValueEvent(object : ValueEventListener {
         override fun onDataChange(snapshot: DataSnapshot) {
             try {
@@ -477,7 +493,6 @@ private fun loadConvRows(act: MainActivity, nickMap: HashMap<String, String>, av
             } catch (e: Exception) {}
         }
         override fun onCancelled(error: DatabaseError) {
-            // отказ на своём узле = просто пусто, без страшной надписи
             act.chatStatus.text = "Нет диалогов."
             dbDenied(act, error)
         }
