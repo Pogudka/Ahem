@@ -64,20 +64,26 @@ private fun msgNick(m: DataSnapshot): String = try {
     r
 } catch (e: Exception) { "" }
 
-// плоский узел диалога: направление строго по отправителю; фолбэк на mine; иначе чужое
-private fun msgMine(m: DataSnapshot, myUid: String): Boolean = try {
-    val uidKeys = arrayOf("senderUid", "from", "uid", "sender", "author", "userId", "owner", "by")
-    for (k in uidKeys) {
-        val v = m.child(k).getValue(String::class.java) ?: ""
-        if (v.isNotEmpty()) return v == myUid
-    }
-    val boolKeys = arrayOf("mine", "isMine", "self", "own")
-    for (k in boolKeys) {
-        val v = m.child(k).getValue(Boolean::class.java)
-        if (v != null) return v
-    }
-    false
-} catch (e: Exception) { false }
+// плоский узел диалога: направление строго по отправителю; фолбэк на mine; иначе чужое.
+// блок-тело, без return внутри try (Kotlin запрещает return в функциях с телом-выражением)
+private fun msgMine(m: DataSnapshot, myUid: String): Boolean {
+    return try {
+        val uidKeys = arrayOf("senderUid", "from", "uid", "sender", "author", "userId", "owner", "by")
+        var res: Boolean? = null
+        for (k in uidKeys) {
+            val v = m.child(k).getValue(String::class.java) ?: ""
+            if (v.isNotEmpty()) { res = (v == myUid); break }
+        }
+        if (res == null) {
+            val boolKeys = arrayOf("mine", "isMine", "self", "own")
+            for (k in boolKeys) {
+                val v = m.child(k).getValue(Boolean::class.java)
+                if (v != null) { res = v; break }
+            }
+        }
+        res ?: false
+    } catch (e: Exception) { false }
+}
 
 internal fun buildChats(act: MainActivity): View {
     val tab = FrameLayout(act)
@@ -199,7 +205,7 @@ internal fun buildChats(act: MainActivity): View {
     tab.addView(act.chatListRoot, FrameLayout.LayoutParams(-1, -1))
     tab.addView(act.convRoot, FrameLayout.LayoutParams(-1, -1))
 
-    ibg.attach(act.window, act.contentFrame, inputBar)
+    ibg.attach(act.contentFrame, inputBar)
 
     return tab
 }
@@ -369,7 +375,6 @@ internal fun loadConversations(act: MainActivity) {
 }
 
 private fun loadConvRows(act: MainActivity, nickMap: HashMap<String, String>, avatarMap: HashMap<String, String>) {
-    // плоская схема: дети conversations = uid собеседников
     act.database.child("conversations").addListenerForSingleValueEvent(object : ValueEventListener {
         override fun onDataChange(snapshot: DataSnapshot) {
             try {
