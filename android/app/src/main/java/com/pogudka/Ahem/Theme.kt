@@ -9,6 +9,7 @@ import android.graphics.Paint
 import android.graphics.Shader
 import android.util.Base64
 import android.widget.TextView
+import android.widget.Toast
 import com.google.firebase.database.DataSnapshot
 
 internal object P {
@@ -55,6 +56,12 @@ internal fun applyTheme(ctx: Context, dark: Boolean) {
 
 internal fun isDark(ctx: Context): Boolean =
     ctx.getSharedPreferences("ahem", Context.MODE_PRIVATE).getBoolean("dark", false)
+
+internal fun dbDenied(act: MainActivity, error: DatabaseError) {
+    if (error.code == "PERMISSION_DENIED") {
+        Toast.makeText(act, "Нет доступа к БД: обнови Rules в Firebase Console", Toast.LENGTH_LONG).show()
+    }
+}
 
 internal fun trimNum(d: Double): String {
     val r = Math.round(d * 10.0) / 10.0
