@@ -64,7 +64,6 @@ class MainActivity : Activity() {
     internal var isLoggingIn = false
     internal var feedQuery = ""
     internal val lastPosts = ArrayList<DataSnapshot>()
-    internal var netWarned = false
 
     internal lateinit var ptrHeader: FrameLayout
     internal lateinit var ptrSpin: ImageView
@@ -231,7 +230,7 @@ class MainActivity : Activity() {
         val glass = GlassDrawable()
         glass.setLiveBlur(true)
         glass.setRadius(dp(28).toFloat())
-        glass.setBlurLevel(3)
+        glass.setBlurRadius(dp(22).toFloat())
         glass.setGlassTint(P.navGlass)
         glass.setBorder(P.border, dp(1).toFloat())
         glassNav = glass
