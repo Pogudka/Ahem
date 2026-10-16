@@ -1,6 +1,7 @@
 package com.pogudka.Ahem
 
 import android.view.Gravity
+import android.view.View
 import android.widget.LinearLayout
 import android.widget.TextView
 
