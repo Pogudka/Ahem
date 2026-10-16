@@ -59,7 +59,7 @@ internal fun isDark(ctx: Context): Boolean =
     ctx.getSharedPreferences("ahem", Context.MODE_PRIVATE).getBoolean("dark", false)
 
 internal fun dbDenied(act: MainActivity, error: DatabaseError) {
-    if (error.code == "PERMISSION_DENIED") {
+    if (error.message.contains("Permission denied", ignoreCase = true)) {
         Toast.makeText(act, "Нет доступа к БД: обнови Rules в Firebase Console", Toast.LENGTH_LONG).show()
     }
 }
