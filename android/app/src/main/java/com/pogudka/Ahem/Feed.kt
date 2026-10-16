@@ -27,6 +27,13 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+internal fun decodeCached(act: MainActivity, b64: String, px: Int, key: String): Bitmap? {
+    act.imageCache[key]?.let { return it }
+    val b = decodeScaled(b64, px) ?: return null
+    act.imageCache[key] = b
+    return b
+}
+
 internal fun mediaFor(act: MainActivity, postId: String, cb: (String) -> Unit) {
     act.mediaCache[postId]?.let { cb(it); return }
     act.database.child("postMedia").child(postId).addListenerForSingleValueEvent(object : ValueEventListener {
