@@ -46,6 +46,7 @@ internal fun buildProfile(act: MainActivity): View {
     val peLp = LinearLayout.LayoutParams(act.dp(38), act.dp(38))
     peLp.marginStart = act.dp(8)
     act.profileEditIv.layoutParams = peLp
+    act.profileEditIv.visibility = View.GONE
     nickRow.addView(act.profileNick)
     nickRow.addView(act.profileSettingsIv)
     nickRow.addView(act.profileEditIv)
@@ -742,8 +743,7 @@ internal fun applyProfileButtons(act: MainActivity, targetId: String, nick: Stri
     if (targetId == act.currentUserId) {
         act.profileBtn1.text = "Редактировать профиль"
         act.profileBtn1.setOnClickListener { showEditProfileDialog(act) }
-        act.profileEditIv.visibility = View.VISIBLE
-        act.profileEditIv.setOnClickListener { showEditProfileDialog(act) }
+        act.profileEditIv.visibility = View.GONE
         act.profileSettingsIv.visibility = View.VISIBLE
     } else {
         act.profileBtn1.text = "Написать"
