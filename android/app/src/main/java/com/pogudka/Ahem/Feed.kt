@@ -13,7 +13,6 @@ import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import android.view.View
 import android.view.animation.LinearInterpolator
-import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.ImageView
@@ -740,43 +739,32 @@ internal fun openViewer(act: MainActivity, images: List<String>, start: Int) {
     img.scaleType = ImageView.ScaleType.MATRIX
     frame.addView(img, FrameLayout.LayoutParams(-1, -1))
 
-    val back = TextView(act)
-    back.text = "←"
-    back.setTextColor(0xFFFFFFFF.toInt())
-    back.textSize = 28f
-    back.typeface = act.fBold
-    back.setPadding(act.dp(16), act.dp(10), act.dp(16), act.dp(10))
-    back.setBackgroundColor(P.scrim)
-    val blp = FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT)
+    val back = glassChip(act, "←", act.dp(48), 0xFFFFFFFF.toInt())
+    val blp = FrameLayout.LayoutParams(act.dp(48), act.dp(48))
     blp.gravity = Gravity.TOP or Gravity.START
+    blp.setMargins(act.dp(14), act.dp(14), 0, 0)
     frame.addView(back, blp)
     back.setOnClickListener { dlg.dismiss() }
 
-    val bar = LinearLayout(act)
-    bar.orientation = LinearLayout.HORIZONTAL
-    bar.setBackgroundColor(P.scrim)
-    val prevB = Button(act)
-    prevB.text = "◀"
-    prevB.setTextColor(0xFFFFFFFF.toInt())
-    prevB.layoutParams = act.lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
-    act.wt(prevB, 1f)
-    val cnt = TextView(act)
-    cnt.setTextColor(0xFFFFFFFF.toInt())
-    cnt.gravity = Gravity.CENTER
-    cnt.typeface = act.fSemi
-    cnt.layoutParams = act.lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
-    act.wt(cnt, 2f)
-    val nextB = Button(act)
-    nextB.text = "▶"
-    nextB.setTextColor(0xFFFFFFFF.toInt())
-    nextB.layoutParams = act.lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
-    act.wt(nextB, 1f)
-    bar.addView(prevB)
-    bar.addView(cnt)
-    bar.addView(nextB)
-    val brp = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT)
-    brp.gravity = Gravity.BOTTOM
-    frame.addView(bar, brp)
+    val prev = glassChip(act, "‹", act.dp(56), 0xFFFFFFFF.toInt())
+    val plp = FrameLayout.LayoutParams(act.dp(56), act.dp(56))
+    plp.gravity = Gravity.START or Gravity.CENTER_VERTICAL
+    plp.setMargins(act.dp(10), 0, 0, 0)
+    frame.addView(prev, plp)
+
+    val next = glassChip(act, "›", act.dp(56), 0xFFFFFFFF.toInt())
+    val nlp = FrameLayout.LayoutParams(act.dp(56), act.dp(56))
+    nlp.gravity = Gravity.END or Gravity.CENTER_VERTICAL
+    nlp.setMargins(0, 0, act.dp(10), 0)
+    frame.addView(next, nlp)
+
+    val cnt = glassChip(act, "", act.dp(0), 0xFFFFFFFF.toInt())
+    cnt.textSize = 15f
+    cnt.setPadding(act.dp(18), act.dp(10), act.dp(18), act.dp(10))
+    val clp = FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT)
+    clp.gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+    clp.setMargins(0, 0, 0, act.dp(28))
+    frame.addView(cnt, clp)
 
     dlg.setContentView(frame)
     dlg.show()
@@ -833,21 +821,17 @@ internal fun openViewer(act: MainActivity, images: List<String>, start: Int) {
             img.post { setup(b) }
         }
         cnt.text = "${idx + 1} / ${images.size}"
-        prevB.isEnabled = idx > 0
-        nextB.isEnabled = idx < images.size - 1
+        prev.alpha = if (idx > 0) 1f else 0.3f
+        next.alpha = if (idx < images.size - 1) 1f else 0.3f
+        prev.isEnabled = idx > 0
+        next.isEnabled = idx < images.size - 1
     }
 
-    prevB.setOnClickListener {
-        if (idx > 0) {
-            idx--
-            show()
-        }
+    prev.setOnClickListener {
+        if (idx > 0) { idx--; show() }
     }
-    nextB.setOnClickListener {
-        if (idx < images.size - 1) {
-            idx++
-            show()
-        }
+    next.setOnClickListener {
+        if (idx < images.size - 1) { idx++; show() }
     }
 
     val sgd = ScaleGestureDetector(act, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
