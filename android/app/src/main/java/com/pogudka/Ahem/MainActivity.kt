@@ -88,10 +88,6 @@ class MainActivity : Activity() {
     internal var currentChatOtherUid = ""
     internal var currentChatOtherNick = ""
     internal var convListener: ValueEventListener? = null
-    internal var convListener2: ValueEventListener? = null
-    internal var convListener3: ValueEventListener? = null
-    internal var chatSnapMine: DataSnapshot? = null
-    internal var chatSnapPeer: DataSnapshot? = null
     internal var chatSnapFlat: DataSnapshot? = null
 
     internal lateinit var profileRoot: LinearLayout
@@ -234,7 +230,6 @@ class MainActivity : Activity() {
         val glass = GlassDrawable()
         glass.setLiveBlur(true)
         glass.setRadius(dp(28).toFloat())
-        glass.setBlurRadius(dp(22).toFloat())
         glass.setGlassTint(P.navGlass)
         glass.setBorder(P.border, dp(1).toFloat())
         glassNav = glass
@@ -268,7 +263,7 @@ class MainActivity : Activity() {
         convBox.setPadding(0, 0, 0, dp(8))
         chatListRows.setPadding(0, 0, 0, navSpace)
 
-        glass.attach(contentFrame, navWrap)
+        glass.attach(window, contentFrame, navWrap)
         hookGlassScroll()
         pumpGlass()
 
@@ -332,9 +327,7 @@ class MainActivity : Activity() {
         authListener?.let { auth.removeAuthStateListener(it) }
         ptrAnimator?.cancel()
         try {
-            convListener?.let { database.child("conversations").child(currentUserId).child(currentChat).removeEventListener(it) }
-            convListener2?.let { database.child("conversations").child(currentChat).child(currentUserId).removeEventListener(it) }
-            convListener3?.let { database.child("conversations").child(currentChat).removeEventListener(it) }
+            convListener?.let { database.child("conversations").child(currentChat).removeEventListener(it) }
         } catch (e: Exception) {}
     }
 
