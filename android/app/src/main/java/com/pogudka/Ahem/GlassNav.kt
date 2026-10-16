@@ -34,15 +34,14 @@ internal class GlassDrawable : Drawable() {
     private val rTiny = RectF()
     private val path = Path()
     private var radius = 0f
-    private var blurRadius = 18f
     private val handler = Handler(Looper.getMainLooper())
     private var pending = false
     private val locEx = IntArray(2)
     private val locHost = IntArray(2)
 
-    // фиксированный коэффициент сжатия: НЕ равен радиусу блюра.
-    // 10 даёт tiny разумного размера и гладкий апскейл = реальное размытие.
-    private val DOWN = 10
+    // коэффициент сжатия фона. 4 в два прохода => эффективное размытие ~16px,
+    // но tiny остаётся приличного размера (не превращается в однотонную плашку).
+    private val DIV = 4
 
     private val scrollListener = ViewTreeObserver.OnScrollChangedListener { requestRefresh() }
     private val layoutListener = ViewTreeObserver.OnGlobalLayoutListener { requestRefresh() }
@@ -60,7 +59,7 @@ internal class GlassDrawable : Drawable() {
     }
 
     fun setRadius(r: Float) { radius = r }
-    fun setBlurRadius(px: Float) { blurRadius = px.coerceIn(6f, 40f) }
+    fun setBlurRadius(px: Float) { /* сила задаётся DIV,这个方法 оставлен для совместимости вызовов */ }
     fun setGlassTint(color: Int) { tintPaint.color = color }
 
     fun setBorder(color: Int, widthPx: Float) {
@@ -75,7 +74,7 @@ internal class GlassDrawable : Drawable() {
     fun requestRefresh() {
         if (!liveBlur || pending) return
         pending = true
-        handler.postDelayed({ pending = false; refresh() }, 140)
+        handler.postDelayed({ pending = false; refresh() }, 130)
     }
 
     private fun refresh() {
@@ -86,8 +85,8 @@ internal class GlassDrawable : Drawable() {
         val h = ex.height
         if (w <= 0 || h <= 0) return
 
-        val tw = (w / DOWN).coerceAtLeast(2)
-        val th = (h / DOWN).coerceAtLeast(2)
+        val tw = (w / DIV).coerceAtLeast(2)
+        val th = (h / DIV).coerceAtLeast(2)
 
         val localCap: Bitmap
         val ec = cap
@@ -104,23 +103,20 @@ internal class GlassDrawable : Drawable() {
         if (eo != null && eo.width == w && eo.height == h) localOut = eo
         else { localOut = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888); out = localOut }
 
+        // ВАЖНО: никаких setLayerType / PixelCopy / рефлексии.
+        // contentFrame НЕ содержит пилюлю (пилюля — её сосед в rootFrame),
+        // поэтому прятать exclude не нужно и нельзя (это ломало захват раньше).
         ex.getLocationInWindow(locEx)
         host.getLocationInWindow(locHost)
         val dx = (locEx[0] - locHost[0]).toFloat()
         val dy = (locEx[1] - locHost[1]).toFloat()
 
-        val oldVis = ex.visibility
-        ex.visibility = View.INVISIBLE
-        host.setLayerType(View.LAYER_TYPE_SOFTWARE, null)
         val cs = Canvas(localCap)
         cs.drawColor(0x00000000)
         cs.translate(-dx, -dy)
         cs.clipRect(0f, 0f, w.toFloat(), h.toFloat())
         try { host.draw(cs) } catch (e: Exception) {}
-        host.setLayerType(View.LAYER_TYPE_NONE, null)
-        ex.visibility = oldVis
 
-        // два прохода down->up для более мягкого блюра без额外 мусора
         rTiny.set(0f, 0f, tw.toFloat(), th.toFloat())
         rect.set(0f, 0f, w.toFloat(), h.toFloat())
         var cur: Bitmap = localCap
