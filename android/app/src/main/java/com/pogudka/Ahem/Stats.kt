@@ -16,6 +16,50 @@ internal fun heartSet(iv: ImageView, liked: Boolean) {
     iv.setColorFilter(if (liked) P.heartOn else P.textSec)
 }
 
+internal fun readOnce(
+    ref: DatabaseReference,
+    act: MainActivity,
+    left: Int,
+    onOk: (DataSnapshot) -> Unit,
+    onFail: () -> Unit
+) {
+    ref.addListenerForSingleValueEvent(object : ValueEventListener {
+        override fun onDataChange(snapshot: DataSnapshot) {
+            onOk(snapshot)
+        }
+        override fun onCancelled(error: DatabaseError) {
+            if (left > 1) {
+                act.uiHandler.postDelayed({ readOnce(ref, act, left - 1, onOk, onFail) }, 600)
+            } else {
+                onFail()
+            }
+        }
+    })
+}
+
+internal fun readStatsInto(act: MainActivity, onDone: () -> Unit) {
+    attemptStats(act, 3, onDone)
+}
+
+private fun attemptStats(act: MainActivity, left: Int, onDone: () -> Unit) {
+    act.database.child("postStats").addListenerForSingleValueEvent(object : ValueEventListener {
+        override fun onDataChange(snapshot: DataSnapshot) {
+            for (s in snapshot.children) {
+                val k = s.key ?: continue
+                act.statsMap[k] = s
+            }
+            onDone()
+        }
+        override fun onCancelled(error: DatabaseError) {
+            if (left > 1) {
+                act.uiHandler.postDelayed({ attemptStats(act, left - 1, onDone) }, 600)
+            } else {
+                onDone()
+            }
+        }
+    })
+}
+
 internal fun txWithRetry(
     ref: DatabaseReference,
     act: MainActivity,
@@ -124,70 +168,67 @@ internal fun migrateStats(act: MainActivity, onDone: () -> Unit) {
         return
     }
     act.migrationRunning = true
-    act.database.child("posts").addListenerForSingleValueEvent(object : ValueEventListener {
-        override fun onDataChange(snapshot: DataSnapshot) {
-            var total = 0
-            var doneCnt = 0
-            var failed = 0
-            fun oneDone(ok: Boolean) {
-                if (!ok) failed++
-                doneCnt++
-                if (doneCnt >= total) {
-                    act.migrationRunning = false
-                    if (failed == 0) prefs.edit().putBoolean("migrated_v4", true).apply()
-                    onDone()
-                }
-            }
-            for (p in snapshot.children) {
-                val id = p.key ?: continue
-                val images = p.child("images").getValue(String::class.java) ?: ""
-                val likes = p.child("likes").value as? Number
-                val views = p.child("views").value as? Number
-                val hasLiked = p.child("likedBy").hasChildren()
-                val hasViewed = p.child("viewedBy").hasChildren()
-                if (images.isNotEmpty()) {
-                    total++
-                    act.database.child("postMedia").child(id).addListenerForSingleValueEvent(object : ValueEventListener {
-                        override fun onDataChange(ms: DataSnapshot) {
-                            if (ms.exists()) {
-                                p.ref.child("images").setValue(null)
-                                oneDone(true)
-                            } else {
-                                act.database.child("postMedia").child(id).setValue(images)
-                                p.ref.child("images").setValue(null)
-                                oneDone(true)
-                            }
-                        }
-                        override fun onCancelled(error: DatabaseError) { oneDone(false) }
-                    })
-                }
-                if (likes != null || views != null || hasLiked || hasViewed) {
-                    total++
-                    val lb = HashMap<String, Any>()
-                    for (c in p.child("likedBy").children) c.key?.let { lb[it] = true }
-                    val vb = HashMap<String, Any>()
-                    for (c in p.child("viewedBy").children) c.key?.let { vb[it] = true }
-                    txWithRetry(act.database.child("postStats").child(id), act, 2, { mutableData ->
-                        if (mutableData.child("likes").value is Number) return@txWithRetry Transaction.success(mutableData)
-                        mutableData.child("likes").value = (likes ?: 0).toLong()
-                        mutableData.child("views").value = (views ?: 0).toLong()
-                        for ((k, v) in lb) mutableData.child("likedBy").child(k).value = v
-                        for ((k, v) in vb) mutableData.child("viewedBy").child(k).value = v
-                        Transaction.success(mutableData)
-                    }) { committed, _, _ ->
-                        oneDone(committed)
-                    }
-                }
-            }
-            if (total == 0) {
+    readOnce(act.database.child("posts"), act, 3, { snapshot ->
+        var total = 0
+        var doneCnt = 0
+        var failed = 0
+        fun oneDone(ok: Boolean) {
+            if (!ok) failed++
+            doneCnt++
+            if (doneCnt >= total) {
                 act.migrationRunning = false
-                prefs.edit().putBoolean("migrated_v4", true).apply()
+                if (failed == 0) prefs.edit().putBoolean("migrated_v4", true).apply()
                 onDone()
             }
         }
-        override fun onCancelled(error: DatabaseError) {
+        for (p in snapshot.children) {
+            val id = p.key ?: continue
+            val images = p.child("images").getValue(String::class.java) ?: ""
+            val likes = p.child("likes").value as? Number
+            val views = p.child("views").value as? Number
+            val hasLiked = p.child("likedBy").hasChildren()
+            val hasViewed = p.child("viewedBy").hasChildren()
+            if (images.isNotEmpty()) {
+                total++
+                act.database.child("postMedia").child(id).addListenerForSingleValueEvent(object : ValueEventListener {
+                    override fun onDataChange(ms: DataSnapshot) {
+                        if (ms.exists()) {
+                            p.ref.child("images").setValue(null)
+                            oneDone(true)
+                        } else {
+                            act.database.child("postMedia").child(id).setValue(images)
+                            p.ref.child("images").setValue(null)
+                            oneDone(true)
+                        }
+                    }
+                    override fun onCancelled(error: DatabaseError) { oneDone(false) }
+                })
+            }
+            if (likes != null || views != null || hasLiked || hasViewed) {
+                total++
+                val lb = HashMap<String, Any>()
+                for (c in p.child("likedBy").children) c.key?.let { lb[it] = true }
+                val vb = HashMap<String, Any>()
+                for (c in p.child("viewedBy").children) c.key?.let { vb[it] = true }
+                txWithRetry(act.database.child("postStats").child(id), act, 2, { mutableData ->
+                    if (mutableData.child("likes").value is Number) return@txWithRetry Transaction.success(mutableData)
+                    mutableData.child("likes").value = (likes ?: 0).toLong()
+                    mutableData.child("views").value = (views ?: 0).toLong()
+                    for ((k, v) in lb) mutableData.child("likedBy").child(k).value = v
+                    for ((k, v) in vb) mutableData.child("viewedBy").child(k).value = v
+                    Transaction.success(mutableData)
+                }) { committed, _, _ ->
+                    oneDone(committed)
+                }
+            }
+        }
+        if (total == 0) {
             act.migrationRunning = false
+            prefs.edit().putBoolean("migrated_v4", true).apply()
             onDone()
         }
+    }, {
+        act.migrationRunning = false
+        onDone()
     })
 }
