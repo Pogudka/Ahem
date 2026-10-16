@@ -1,10 +1,7 @@
 package com.pogudka.Ahem
 
 import android.widget.Toast
-import com.google.firebase.auth.FirebaseAuthInvalidCredentialsException
-import com.google.firebase.auth.FirebaseAuthUserCollisionException
-import com.google.firebase.auth.FirebaseAuthWeakPasswordException
-import com.google.firebase.auth.FirebaseNetworkException
+import com.google.firebase.auth.FirebaseAuthException
 import com.google.firebase.database.DataSnapshot
 import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.ValueEventListener
@@ -16,9 +13,14 @@ internal data class Acc(
     val pass: String
 )
 
+internal fun authErrorCode(e: Exception?): String {
+    if (e is FirebaseAuthException) return e.errorCode ?: ""
+    return ""
+}
+
 internal fun isAuthNetworkError(e: Exception?): Boolean {
     if (e == null) return false
-    if (e is FirebaseNetworkException) return true
+    if (authErrorCode(e) == "ERROR_NETWORK_REQUEST_FAILED") return true
     val low = (e.message ?: "").lowercase()
     return low.contains("json conversion failed") ||
         low.contains("<!doctype") ||
@@ -33,25 +35,29 @@ internal fun isAuthNetworkError(e: Exception?): Boolean {
 
 internal fun authErrorText(e: Exception?): String {
     if (e == null) return "Неизвестная ошибка входа"
+    val code = authErrorCode(e)
     val msg = e.message ?: ""
     val low = msg.lowercase()
-    if (low.contains("json conversion failed") || low.contains("<!doctype") || low.contains("403") || low.contains("forbidden") || low.contains("internal error has occurred")) {
+    if (code == "ERROR_NETWORK_REQUEST_FAILED" ||
+        low.contains("json conversion failed") ||
+        low.contains("<!doctype") ||
+        low.contains("403") ||
+        low.contains("forbidden") ||
+        low.contains("internal error has occurred")) {
         return "Серверы Google недоступны из этой сети (блокировка/403). Включи VPN или смени сеть и повтори."
     }
-    if (e is FirebaseNetworkException) {
-        return "Нет связи с сервером. Проверь интернет/VPN и повтори."
-    }
-    if (e is FirebaseAuthWeakPasswordException) {
-        return "Пароль слишком простой (минимум 6 символов)."
-    }
-    if (e is FirebaseAuthInvalidCredentialsException) {
+    if (code == "ERROR_WEAK_PASSWORD") return "Пароль слишком простой (минимум 6 символов)."
+    if (code == "ERROR_INVALID_CREDENTIAL" || code == "ERROR_WRONG_PASSWORD" || code == "ERROR_USER_NOT_FOUND" || code == "ERROR_INVALID_EMAIL") {
         return "Неверный email или пароль."
     }
-    if (e is FirebaseAuthUserCollisionException) {
+    if (code == "ERROR_EMAIL_ALREADY_IN_USE" || code == "ERROR_ACCOUNT_EXISTS_WITH_DIFFERENT_CREDENTIAL") {
         return "Этот email уже зарегистрирован."
     }
-    if (low.contains("too many requests") || low.contains("quota") || low.contains("rate limit")) {
+    if (code == "ERROR_TOO_MANY_REQUESTS" || low.contains("too many requests") || low.contains("quota") || low.contains("rate limit")) {
         return "Слишком много попыток. Подожди минуту и повтори."
+    }
+    if (code == "ERROR_OPERATION_NOT_ALLOWED") {
+        return "Вход по email/паролю отключён в консоли Firebase."
     }
     if (low.contains("network") || low.contains("timeout") || low.contains("unavailable") || low.contains("connection")) {
         return "Проблема с сетью до Google. Включи VPN или смени сеть."
