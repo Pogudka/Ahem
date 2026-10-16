@@ -36,7 +36,7 @@ class MainActivity : Activity() {
 
     private lateinit var tabs: Array<View>
     private lateinit var navIcons: Array<ImageView>
-    private var glassNav: BlurGlassView? = null
+    private var glassNav: GlassDrawable? = null
 
     internal lateinit var authBlock: LinearLayout
     internal lateinit var feedBlock: LinearLayout
@@ -199,16 +199,16 @@ class MainActivity : Activity() {
         nwp.setMargins(dp(16), 0, dp(16), dp(12))
         navWrap.layoutParams = nwp
 
-        val blurView = BlurGlassView(this)
-        blurView.setRadius(dp(28).toFloat())
-        blurView.setTint(P.navGlass)
-        blurView.setBorder(P.border, dp(1).toFloat())
-        blurView.layoutParams = FrameLayout.LayoutParams(-1, -1)
-        glassNav = blurView
+        val glass = GlassDrawable()
+        glass.setRadius(dp(28).toFloat())
+        glass.setTint(P.navGlass)
+        glass.setBorder(P.border, dp(1).toFloat())
+        glassNav = glass
 
         val nav = LinearLayout(this)
         nav.orientation = LinearLayout.HORIZONTAL
         nav.gravity = Gravity.CENTER_VERTICAL
+        nav.background = glass
         nav.setPadding(dp(10), dp(8), dp(10), dp(8))
         nav.layoutParams = FrameLayout.LayoutParams(-1, -2)
 
@@ -223,7 +223,6 @@ class MainActivity : Activity() {
         }
         for (iv in navIcons) nav.addView(iv)
 
-        navWrap.addView(blurView)
         navWrap.addView(nav)
         root.addView(content)
         root.addView(navWrap)
@@ -235,7 +234,7 @@ class MainActivity : Activity() {
         convBox.setPadding(0, 0, 0, navSpace)
         chatListRows.setPadding(0, 0, 0, navSpace)
 
-        blurView.attach(root, navWrap)
+        glass.attach(root, navWrap)
 
         showTab(0)
 
