@@ -5,7 +5,6 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
-import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.provider.MediaStore
@@ -309,6 +308,7 @@ internal fun showSettingsDialog(act: MainActivity) {
         dlg.dismiss()
         act.viewingUserId = ""
         act.viewingNick = ""
+        act.lastProfileTarget = ""
         act.auth.signOut()
         act.showTab(0)
     }
@@ -396,6 +396,7 @@ internal fun showAccountsDialog(act: MainActivity) {
 internal fun switchToAccount(act: MainActivity, acc: Acc) {
     act.viewingUserId = ""
     act.viewingNick = ""
+    act.lastProfileTarget = ""
     act.currentUserId = ""
     act.currentNick = ""
     act.currentEmail = ""
@@ -416,7 +417,24 @@ internal fun switchToAccount(act: MainActivity, acc: Acc) {
         act.uiHandler.removeCallbacks(restore)
         act.isLoggingIn = false
         act.logBtn.text = "Вход"
-        if (!task.isSuccessful) {
+        if (task.isSuccessful) {
+            val uid = act.auth.currentUser?.uid ?: ""
+            act.currentUserId = uid
+            act.currentEmail = acc.email
+            act.viewingUserId = uid
+            enterFeedMode(act)
+            loadMyFollowing(act) { renderFeed(act) }
+            act.database.child("users").child(uid).addListenerForSingleValueEvent(object : ValueEventListener {
+                override fun onDataChange(snapshot: DataSnapshot) {
+                    act.currentNick = snapshot.child("nick").getValue(String::class.java) ?: acc.nick
+                    act.currentAvatar = snapshot.child("avatar").getValue(String::class.java) ?: ""
+                    act.saveSessionPrefs()
+                    renderFeed(act)
+                    refreshProfile(act)
+                }
+                override fun onCancelled(error: DatabaseError) { dbDenied(act, error) }
+            })
+        } else {
             act.feedEmail.setText(acc.email)
             act.feedNick.setText("")
             act.feedPass.setText("")
@@ -428,6 +446,7 @@ internal fun switchToAccount(act: MainActivity, acc: Acc) {
 internal fun switchToManual(act: MainActivity) {
     act.viewingUserId = ""
     act.viewingNick = ""
+    act.lastProfileTarget = ""
     act.currentUserId = ""
     act.currentNick = ""
     act.currentEmail = ""
@@ -568,24 +587,106 @@ internal fun showEditProfileDialog(act: MainActivity) {
 
 internal fun refreshProfile(act: MainActivity) {
     act.profileGen += 1
-    act.profileNick.text = "@"
-    act.profileName.text = ""
-    act.profileBio.text = ""
-    act.profilePostsCount.text = "0"
-    act.profileLikesCount.text = "0"
-    act.profileFollowersCount.text = "0"
-    act.profileFollowingCount.text = "0"
-    act.profilePostsGrid.removeAllViews()
-    act.profileAvatar.setImageBitmap(makeCircularBitmap(createAvatarBitmap(act, ""), act.dp(84)))
+    val targetId = if (act.viewingUserId.isNotEmpty()) act.viewingUserId else act.currentUserId
+    act.currentProfileTargetId = targetId
+    if (targetId.isEmpty()) return
+    if (act.lastProfileTarget != targetId) {
+        act.lastProfileTarget = targetId
+        act.profileNick.text = "@"
+        act.profileName.text = ""
+        act.profileBio.text = ""
+        act.profilePostsCount.text = "0"
+        act.profileLikesCount.text = "0"
+        act.profileFollowersCount.text = "0"
+        act.profileFollowingCount.text = "0"
+        act.profilePostsGrid.removeAllViews()
+        act.profileAvatar.setImageBitmap(makeCircularBitmap(createAvatarBitmap(act, ""), act.dp(84)))
+    }
     act.profileTabPosts.setColorFilter(if (act.profileMode == 0) P.text else P.navInactive)
     act.profileTabLikes.setColorFilter(if (act.profileMode == 1) P.accent else P.navInactive)
-    migrateStats(act) { refreshProfileData(act) }
+    val key = "$targetId|${act.profileMode}"
+    act.gridCache[key]?.let { renderGrid(act, it) }
+    act.gridStatsCache[key]?.let {
+        act.profilePostsCount.text = fmtNum(it.first)
+        act.profileLikesCount.text = fmtNum(it.second)
+    }
+    scheduleMigration(act)
+    refreshProfileData(act)
+}
+
+internal fun renderGrid(act: MainActivity, grid: List<DataSnapshot>) {
+    act.profilePostsGrid.removeAllViews()
+    if (grid.isEmpty()) {
+        val empty = tv(act, if (act.profileMode == 0) "Нет постов" else "Нет лайков", 14f, act.fMed, P.textSec)
+        empty.gravity = Gravity.CENTER
+        empty.setPadding(0, act.dp(40), 0, act.dp(40))
+        act.profilePostsGrid.addView(empty)
+        return
+    }
+    val sortedGrid = grid.sortedByDescending { getTs(it) }
+    val cell = (act.resources.displayMetrics.widthPixels - act.dp(36) - act.dp(4)) / 3
+    var i = 0
+    while (i < sortedGrid.size) {
+        val row = LinearLayout(act)
+        row.orientation = LinearLayout.HORIZONTAL
+        row.layoutParams = act.lp(-1, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
+        for (c in 0 until 3) {
+            val idx = i + c
+            val box = FrameLayout(act)
+            val p2 = LinearLayout.LayoutParams(cell, cell)
+            p2.setMargins(0, 0, act.dp(2), act.dp(2))
+            box.layoutParams = p2
+            if (idx < sortedGrid.size) {
+                try {
+                    val p = sortedGrid[idx]
+                    val postId = p.key ?: ""
+                    val txt = p.child("text").getValue(String::class.java) ?: ""
+                    val lc = (act.statsMap[postId]?.child("likes")?.value as? Number)?.toLong() ?: 0L
+                    box.background = surf(act, 6, filled = true)
+                    val tt = tv(act, txt, 11f, act.fMed, P.text)
+                    tt.maxLines = 6
+                    tt.setPadding(act.dp(6), act.dp(6), act.dp(6), act.dp(18))
+                    box.addView(tt)
+                    mediaFor(act, postId) { str ->
+                        try {
+                            val first = str.split(",").firstOrNull { it.isNotEmpty() }
+                            if (first != null) {
+                                val bb = decodeCached(act, first, cell, "pg$postId")
+                                if (bb != null) {
+                                    box.removeAllViews()
+                                    val iv = ImageView(act)
+                                    iv.setImageBitmap(bb)
+                                    iv.scaleType = ImageView.ScaleType.CENTER_CROP
+                                    iv.layoutParams = FrameLayout.LayoutParams(-1, -1)
+                                    box.addView(iv)
+                                }
+                            }
+                        } catch (e: Exception) {
+                        }
+                    }
+                    box.setOnClickListener { openPostDetail(act, p) }
+                    val liked = act.statsMap[postId]?.child("likedBy")?.child(act.currentUserId)?.value != null
+                    val heartQuick = icon(act, R.drawable.ic_heart_outline, P.textSec, act.dp(26))
+                    heartQuick.setPadding(act.dp(4), act.dp(4), act.dp(4), act.dp(4))
+                    val hp = FrameLayout.LayoutParams(act.dp(26), act.dp(26))
+                    hp.gravity = Gravity.TOP or Gravity.END
+                    hp.setMargins(0, act.dp(6), act.dp(6), 0)
+                    box.addView(heartQuick, hp)
+                    val cntHidden = tv(act, "♥ " + fmtNum(lc), 12f, act.fSemi, P.text)
+                    attachLike(act, heartQuick, cntHidden, heartQuick, postId, liked)
+                } catch (e: Exception) {
+                }
+            }
+            row.addView(box)
+        }
+        act.profilePostsGrid.addView(row)
+        i += 3
+    }
 }
 
 internal fun refreshProfileData(act: MainActivity) {
     val gen = act.profileGen
-    val targetId = if (act.viewingUserId.isNotEmpty()) act.viewingUserId else act.currentUserId
-    act.currentProfileTargetId = targetId
+    val targetId = act.currentProfileTargetId
     if (targetId.isEmpty()) return
 
     act.database.child("followers").child(targetId).addListenerForSingleValueEvent(object : ValueEventListener {
@@ -615,130 +716,88 @@ internal fun refreshProfileData(act: MainActivity) {
                 act.profileNick.text = "@$nick"
                 act.profileName.text = nick
                 act.profileBio.text = bio
-                if (targetId == act.currentUserId) {
-                    act.profileBtn1.text = "Редактировать профиль"
-                    act.profileBtn1.setOnClickListener { showEditProfileDialog(act) }
-                    act.profileEditIv.visibility = View.VISIBLE
-                    act.profileEditIv.setOnClickListener { showEditProfileDialog(act) }
-                    act.profileSettingsIv.visibility = View.VISIBLE
-                } else {
-                    act.profileBtn1.text = "Написать"
-                    act.profileBtn1.setOnClickListener { openChat(act, targetId, nick) }
-                    act.profileEditIv.visibility = View.GONE
-                    act.profileSettingsIv.visibility = View.GONE
-                }
-                act.profileBtn2.setOnClickListener {
-                    val cm = act.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                    cm.setPrimaryClip(ClipData.newPlainText("nick", "@$nick"))
-                    Toast.makeText(act, "Ник скопирован", Toast.LENGTH_SHORT).show()
-                }
-                val postsRef = act.database.child("posts")
-                val statsRef = act.database.child("postStats")
-                var psSnap: DataSnapshot? = null
-                var stSnap: DataSnapshot? = null
-                var done = false
-                fun finish() {
-                    if (gen != act.profileGen) return
-                    if (done) return
-                    done = true
-                    act.statsMap.clear()
-                    if (stSnap != null) for (s in stSnap!!.children) s.key?.let { act.statsMap[it] = s }
-                    var ownCount = 0L
-                    var sumLikes = 0L
-                    val grid = ArrayList<DataSnapshot>()
-                    if (psSnap != null) {
-                        for (p in psSnap!!.children) {
-                            val isMine = p.child("authorId").getValue(String::class.java) == targetId
-                            val liked = act.statsMap[p.key ?: ""]?.child("likedBy")?.child(targetId)?.value != null
-                            if (isMine) {
-                                ownCount++
-                                sumLikes += (act.statsMap[p.key ?: ""]?.child("likes")?.value as? Number)?.toLong() ?: 0L
-                            }
-                            if (act.profileMode == 0 && isMine) grid.add(p)
-                            if (act.profileMode == 1 && liked) grid.add(p)
-                        }
-                    }
-                    act.profilePostsCount.text = fmtNum(ownCount)
-                    act.profileLikesCount.text = fmtNum(sumLikes)
-                    act.profilePostsGrid.removeAllViews()
-                    if (grid.isEmpty()) {
-                        val empty = tv(act, if (act.profileMode == 0) "Нет постов" else "Нет лайков", 14f, act.fMed, P.textSec)
-                        empty.gravity = Gravity.CENTER
-                        empty.setPadding(0, act.dp(40), 0, act.dp(40))
-                        act.profilePostsGrid.addView(empty)
-                        return
-                    }
-                    val sortedGrid = grid.sortedByDescending { getTs(it) }
-                    val cell = (act.resources.displayMetrics.widthPixels - act.dp(36) - act.dp(4)) / 3
-                    var i = 0
-                    while (i < sortedGrid.size) {
-                        val row = LinearLayout(act)
-                        row.orientation = LinearLayout.HORIZONTAL
-                        row.layoutParams = act.lp(-1, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
-                        for (c in 0 until 3) {
-                            val idx = i + c
-                            val box = FrameLayout(act)
-                            val p2 = LinearLayout.LayoutParams(cell, cell)
-                            p2.setMargins(0, 0, act.dp(2), act.dp(2))
-                            box.layoutParams = p2
-                            if (idx < sortedGrid.size) {
-                                try {
-                                    val p = sortedGrid[idx]
-                                    val postId = p.key ?: ""
-                                    val txt = p.child("text").getValue(String::class.java) ?: ""
-                                    val lc = (act.statsMap[postId]?.child("likes")?.value as? Number)?.toLong() ?: 0L
-                                    box.background = surf(act, 6, filled = true)
-                                    val tt = tv(act, txt, 11f, act.fMed, P.text)
-                                    tt.maxLines = 6
-                                    tt.setPadding(act.dp(6), act.dp(6), act.dp(6), act.dp(18))
-                                    box.addView(tt)
-                                    mediaFor(act, postId) { str ->
-                                        try {
-                                            val first = str.split(",").firstOrNull { it.isNotEmpty() }
-                                            if (first != null) {
-                                                val bb = decodeCached(act, first, cell, "pg$postId")
-                                                if (bb != null) {
-                                                    box.removeAllViews()
-                                                    val iv = ImageView(act)
-                                                    iv.setImageBitmap(bb)
-                                                    iv.scaleType = ImageView.ScaleType.CENTER_CROP
-                                                    iv.layoutParams = FrameLayout.LayoutParams(-1, -1)
-                                                    box.addView(iv)
-                                                }
-                                            }
-                                        } catch (e: Exception) {
-                                        }
-                                    }
-                                    box.setOnClickListener { openPostDetail(act, p) }
-                                    val liked = act.statsMap[postId]?.child("likedBy")?.child(act.currentUserId)?.value != null
-                                    val heartQuick = icon(act, R.drawable.ic_heart_outline, P.textSec, act.dp(26))
-                                    heartQuick.setPadding(act.dp(4), act.dp(4), act.dp(4), act.dp(4))
-                                    val hp = FrameLayout.LayoutParams(act.dp(26), act.dp(26))
-                                    hp.gravity = Gravity.TOP or Gravity.END
-                                    hp.setMargins(0, act.dp(6), act.dp(6), 0)
-                                    box.addView(heartQuick, hp)
-                                    val cntHidden = tv(act, "♥ " + fmtNum(lc), 12f, act.fSemi, P.text)
-                                    attachLike(act, heartQuick, cntHidden, heartQuick, postId, liked)
-                                } catch (e: Exception) {
-                                }
-                            }
-                            row.addView(box)
-                        }
-                        act.profilePostsGrid.addView(row)
-                        i += 3
-                    }
-                }
-                postsRef.addListenerForSingleValueEvent(object : ValueEventListener {
-                    override fun onDataChange(snapshot: DataSnapshot) { psSnap = snapshot; finish() }
-                    override fun onCancelled(error: DatabaseError) { psSnap = null; dbDenied(act, error); finish() }
-                })
-                statsRef.addListenerForSingleValueEvent(object : ValueEventListener {
-                    override fun onDataChange(snapshot: DataSnapshot) { stSnap = snapshot; finish() }
-                    override fun onCancelled(error: DatabaseError) { stSnap = null; dbDenied(act, error); finish() }
-                })
+                applyProfileButtons(act, targetId, nick)
+                loadProfileGrid(act, gen, targetId)
             } catch (e: Exception) {
             }
         }
-        override fun onCancelled(error: DatabaseError) { dbDenied(act, error) }
+        override fun onCancelled(error: DatabaseError) {
+            if (gen != act.profileGen) return
+            val fallbackNick = if (act.currentNick.isNotEmpty()) act.currentNick else "?"
+            act.profileNick.text = "@$fallbackNick"
+            act.profileName.text = fallbackNick
+            act.profileAvatar.setImageBitmap(makeCircularBitmap(createAvatarBitmap(act, fallbackNick), act.dp(84)))
+            applyProfileButtons(act, targetId, fallbackNick)
+            loadProfileGrid(act, gen, targetId)
+        }
+    })
+}
+
+internal fun applyProfileButtons(act: MainActivity, targetId: String, nick: String) {
+    if (targetId == act.currentUserId) {
+        act.profileBtn1.text = "Редактировать профиль"
+        act.profileBtn1.setOnClickListener { showEditProfileDialog(act) }
+        act.profileEditIv.visibility = View.VISIBLE
+        act.profileEditIv.setOnClickListener { showEditProfileDialog(act) }
+        act.profileSettingsIv.visibility = View.VISIBLE
+    } else {
+        act.profileBtn1.text = "Написать"
+        act.profileBtn1.setOnClickListener { openChat(act, targetId, nick) }
+        act.profileEditIv.visibility = View.GONE
+        act.profileSettingsIv.visibility = View.GONE
+    }
+    act.profileBtn2.setOnClickListener {
+        val cm = act.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        cm.setPrimaryClip(ClipData.newPlainText("nick", "@$nick"))
+        Toast.makeText(act, "Ник скопирован", Toast.LENGTH_SHORT).show()
+    }
+}
+
+internal fun loadProfileGrid(act: MainActivity, gen: Int, targetId: String) {
+    val postsRef = act.database.child("posts")
+    val statsRef = act.database.child("postStats")
+    var psSnap: DataSnapshot? = null
+    var stSnap: DataSnapshot? = null
+    var done = false
+    fun finish() {
+        if (gen != act.profileGen) return
+        if (done) return
+        done = true
+        act.statsMap.clear()
+        if (stSnap != null) for (s in stSnap!!.children) s.key?.let { act.statsMap[it] = s }
+        var ownCount = 0L
+        var sumLikes = 0L
+        val grid = ArrayList<DataSnapshot>()
+        if (psSnap != null) {
+            for (p in psSnap!!.children) {
+                val isMine = p.child("authorId").getValue(String::class.java) == targetId
+                val liked = act.statsMap[p.key ?: ""]?.child("likedBy")?.child(targetId)?.value != null
+                if (isMine) {
+                    ownCount++
+                    sumLikes += (act.statsMap[p.key ?: ""]?.child("likes")?.value as? Number)?.toLong() ?: 0L
+                }
+                if (act.profileMode == 0 && isMine) grid.add(p)
+                if (act.profileMode == 1 && liked) grid.add(p)
+            }
+        }
+        val key = "$targetId|${act.profileMode}"
+        act.gridCache[key] = grid
+        act.gridStatsCache[key] = Pair(ownCount, sumLikes)
+        act.profilePostsCount.text = fmtNum(ownCount)
+        act.profileLikesCount.text = fmtNum(sumLikes)
+        renderGrid(act, grid)
+    }
+    postsRef.addListenerForSingleValueEvent(object : ValueEventListener {
+        override fun onDataChange(snapshot: DataSnapshot) { psSnap = snapshot; finish() }
+        override fun onCancelled(error: DatabaseError) {
+            psSnap = null
+            dbDenied(act, error)
+            val key = "$targetId|${act.profileMode}"
+            act.gridCache[key]?.let { renderGrid(act, it) }
+        }
+    })
+    statsRef.addListenerForSingleValueEvent(object : ValueEventListener {
+        override fun onDataChange(snapshot: DataSnapshot) { stSnap = snapshot; finish() }
+        override fun onCancelled(error: DatabaseError) { stSnap = null; finish() }
     })
 }
