@@ -189,7 +189,7 @@ internal fun buildChats(act: MainActivity): View {
     tab.addView(act.chatListRoot, FrameLayout.LayoutParams(-1, -1))
     tab.addView(act.convRoot, FrameLayout.LayoutParams(-1, -1))
 
-    ibg.attach(act.window, inputBar)
+    ibg.attach(act.contentFrame, inputBar)
 
     return tab
 }
@@ -203,10 +203,19 @@ internal fun closeConversation(act: MainActivity) {
         act.database.child("conversations").child(act.currentChat).child(act.currentUserId)
             .removeEventListener(it)
     }
+    act.convLegacyListeners?.forEach { lv ->
+        // снять нельзя без ссылки на ref; храним пары ref+listener ниже
+    }
+    act.convLegacyRefs?.let { refs ->
+        act.convLegacyListeners?.forEachIndexed { i, lv -> refs.getOrNull(i)?.removeEventListener(lv) }
+    }
     act.convListener = null
     act.convListener2 = null
+    act.convLegacyListeners = null
+    act.convLegacyRefs = null
     act.chatSnapMine = null
     act.chatSnapPeer = null
+    act.chatLegacySnaps = HashMap()
     act.currentChat = ""
     act.currentChatOtherUid = ""
     act.currentChatOtherNick = ""
@@ -228,6 +237,7 @@ internal fun openChat(act: MainActivity, peerUid: String, peerNick: String) {
     act.convBox.removeAllViews()
     act.chatSnapMine = null
     act.chatSnapPeer = null
+    act.chatLegacySnaps = HashMap()
 
     act.convListener?.let {
         act.database.child("conversations").child(act.currentUserId).child(peerUid).removeEventListener(it)
@@ -240,23 +250,38 @@ internal fun openChat(act: MainActivity, peerUid: String, peerNick: String) {
     val boxPeer = act.database.child("conversations").child(peerUid).child(act.currentUserId)
 
     val l1 = object : ValueEventListener {
-        override fun onDataChange(s: DataSnapshot) {
-            act.chatSnapMine = s
-            renderMergedChat(act)
-        }
+        override fun onDataChange(s: DataSnapshot) { act.chatSnapMine = s; renderMergedChat(act) }
         override fun onCancelled(error: DatabaseError) { dbDenied(act, error) }
     }
     val l2 = object : ValueEventListener {
-        override fun onDataChange(s: DataSnapshot) {
-            act.chatSnapPeer = s
-            renderMergedChat(act)
-        }
+        override fun onDataChange(s: DataSnapshot) { act.chatSnapPeer = s; renderMergedChat(act) }
         override fun onCancelled(error: DatabaseError) { dbDenied(act, error) }
     }
     act.convListener = l1
     act.convListener2 = l2
     boxMine.addValueEventListener(l1)
     boxPeer.addValueEventListener(l2)
+
+    // фолбэк: плоский общий узел пары (старая схема). пробуем разные разделители/порядок.
+    val me = act.currentUserId
+    val seps = listOf("_", "", "-", ".", ":")
+    val keys = LinkedHashSet<String>()
+    for (s in seps) { keys.add("$me$s$peerUid"); keys.add("$peerUid$s$me") }
+    val legacyListeners = ArrayList<ValueEventListener>()
+    val legacyRefs = ArrayList<com.google.firebase.database.DatabaseReference>()
+    for (k in keys) {
+        val ref = act.database.child("conversations").child(k)
+        val lv = object : ValueEventListener {
+            override fun onDataChange(s: DataSnapshot) {
+                if (s.exists()) { act.chatLegacySnaps[k] = s; renderMergedChat(act) }
+            }
+            override fun onCancelled(error: DatabaseError) {}
+        }
+        legacyListeners.add(lv); legacyRefs.add(ref)
+        ref.addListenerForSingleValueEvent(lv)
+    }
+    act.convLegacyListeners = legacyListeners
+    act.convLegacyRefs = legacyRefs
 }
 
 private fun renderMergedChat(act: MainActivity) {
@@ -273,6 +298,9 @@ private fun renderMergedChat(act: MainActivity) {
     }
     add(act.chatSnapMine, true)
     add(act.chatSnapPeer, false)
+    if (items.isEmpty() && act.chatSnapMine != null && act.chatSnapPeer != null) {
+        for ((_, s) in act.chatLegacySnaps) add(s, false)
+    }
     items.sortBy { msgTs(it.first) }
     renderConversation(act, items)
 }
@@ -332,7 +360,7 @@ internal fun renderConversation(act: MainActivity, items: List<Pair<DataSnapshot
         }
         act.convBox.addView(row)
     }
-    if (drawn == 0 && (act.chatSnapMine != null || act.chatSnapPeer != null)) {
+    if (drawn == 0 && act.chatSnapMine != null && act.chatSnapPeer != null) {
         val empty = tv(act, "Нет сообщений", 14f, act.fMed, P.textSec)
         empty.gravity = Gravity.CENTER
         empty.setPadding(0, act.dp(40), 0, act.dp(40))
@@ -350,31 +378,17 @@ internal fun sendMessage(act: MainActivity) {
     val base = act.database.child("conversations")
     val key1 = base.child(act.currentUserId).child(peer).push().key ?: return
     val m1 = HashMap<String, Any>()
-    m1["text"] = text
-    m1["message"] = text
-    m1["body"] = text
-    m1["ts"] = now
-    m1["timestamp"] = now
-    m1["createdAt"] = now
-    m1["mine"] = true
-    m1["senderUid"] = act.currentUserId
-    m1["uid"] = act.currentUserId
-    m1["from"] = act.currentUserId
-    m1["nick"] = act.currentNick
+    m1["text"] = text; m1["message"] = text; m1["body"] = text
+    m1["ts"] = now; m1["timestamp"] = now; m1["createdAt"] = now
+    m1["mine"] = true; m1["senderUid"] = act.currentUserId; m1["uid"] = act.currentUserId
+    m1["from"] = act.currentUserId; m1["nick"] = act.currentNick
     base.child(act.currentUserId).child(peer).child(key1).setValue(m1)
     val key2 = base.child(peer).child(act.currentUserId).push().key ?: return
     val m2 = HashMap<String, Any>()
-    m2["text"] = text
-    m2["message"] = text
-    m2["body"] = text
-    m2["ts"] = now
-    m2["timestamp"] = now
-    m2["createdAt"] = now
-    m2["mine"] = false
-    m2["senderUid"] = act.currentUserId
-    m2["uid"] = act.currentUserId
-    m2["from"] = act.currentUserId
-    m2["nick"] = act.currentNick
+    m2["text"] = text; m2["message"] = text; m2["body"] = text
+    m2["ts"] = now; m2["timestamp"] = now; m2["createdAt"] = now
+    m2["mine"] = false; m2["senderUid"] = act.currentUserId; m2["uid"] = act.currentUserId
+    m2["from"] = act.currentUserId; m2["nick"] = act.currentNick
     base.child(peer).child(act.currentUserId).child(key2).setValue(m2)
     act.msgField.setText("")
 }
