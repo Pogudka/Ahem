@@ -96,6 +96,28 @@ class MainActivity : Activity() {
     private fun isDark(): Boolean =
         getSharedPreferences("ahem", Context.MODE_PRIVATE).getBoolean("dark", false)
 
+    // ================= ФОРМАТ ЧИСЕЛ (10M / 100K / 10K) =================
+    private fun trimNum(d: Double): String {
+        val r = Math.round(d * 10.0) / 10.0
+        return if (r == Math.floor(r)) {
+            r.toLong().toString()
+        } else {
+            r.toString()
+        }
+    }
+
+    private fun fmtNum(n: Long): String {
+        if (n >= 1_000_000L) return trimNum(n / 1_000_000.0) + "M"
+        if (n >= 1_000L) return trimNum(n / 1_000.0) + "K"
+        return n.toString()
+    }
+
+    private fun getTs(post: DataSnapshot): Long {
+        val v = post.child("timestamp").value
+        if (v is Number) return v.toLong()
+        return (v as? String)?.toLongOrNull() ?: 0L
+    }
+
     // ================= ШРИФТЫ =================
     private val fBold: Typeface by lazy { ResourcesCompat.getFont(this, R.font.unbounded)!! }
     private val fSemi: Typeface by lazy { ResourcesCompat.getFont(this, R.font.ubuntu_medium)!! }
@@ -126,7 +148,7 @@ class MainActivity : Activity() {
     }
 
     private fun parseCount(t: TextView): Int =
-        t.text.toString().substringAfter("♥").trim().toIntOrNull() ?: 0
+        t.text.toString().substringAfter("♥").trim().replace("K", "000").replace("M", "000000").toIntOrNull() ?: 0
 
     // ================= ГРАФИКА =================
     private fun surf(radius: Int, filled: Boolean = true): GradientDrawable {
@@ -275,7 +297,6 @@ class MainActivity : Activity() {
 
     private lateinit var authBlock: LinearLayout
     private lateinit var feedBlock: LinearLayout
-    private lateinit var feedHeader: TextView
     private lateinit var feedEmail: EditText
     private lateinit var feedNick: EditText
     private lateinit var feedPass: EditText
@@ -291,6 +312,7 @@ class MainActivity : Activity() {
     private lateinit var logBtn: TextView
     private var currentUserId = ""
     private var currentNick = ""
+    private var currentEmail = ""
     private var currentAvatar = ""
     private val pendingImages = ArrayList<String>()
     private var isRegistering = false
@@ -340,6 +362,36 @@ class MainActivity : Activity() {
     private var feedListener: ValueEventListener? = null
     private var authListener: FirebaseAuth.AuthStateListener? = null
     private val avatarCache = HashMap<String, Bitmap>()
+    private val viewedLocally = HashSet<String>()
+
+    // ================= МУЛЬТИАККАУНТ (SharedPreferences) =================
+    private fun saveAccount(uid: String, nick: String, email: String) {
+        if (uid.isEmpty()) return
+        val prefs = getSharedPreferences("ahem", Context.MODE_PRIVATE)
+        val raw = prefs.getString("accounts", "") ?: ""
+        val list = ArrayList<Triple<String, String, String>>()
+        for (rec in raw.split("\u0002")) {
+            if (rec.isEmpty()) continue
+            val parts = rec.split("\u0001")
+            if (parts.size == 3) list.add(Triple(parts[0], parts[1], parts[2]))
+        }
+        val filtered = list.filter { it.first != uid }
+        filtered.add(Triple(uid, nick, email))
+        val out = filtered.joinToString("\u0002") { "${it.first}\u0001${it.second}\u0001${it.third}" }
+        prefs.edit().putString("accounts", out).apply()
+    }
+
+    private fun loadAccounts(): List<Triple<String, String, String>> {
+        val prefs = getSharedPreferences("ahem", Context.MODE_PRIVATE)
+        val raw = prefs.getString("accounts", "") ?: ""
+        val list = ArrayList<Triple<String, String, String>>()
+        for (rec in raw.split("\u0002")) {
+            if (rec.isEmpty()) continue
+            val parts = rec.split("\u0001")
+            if (parts.size == 3) list.add(Triple(parts[0], parts[1], parts[2]))
+        }
+        return list
+    }
 
     // ================= ЛАЙКИ =================
     private fun heartSet(iv: ImageView, liked: Boolean) {
@@ -361,7 +413,7 @@ class MainActivity : Activity() {
             val prevLiked = liked[0]
             val prevCount = parseCount(countTv)
             liked[0] = !prevLiked
-            countTv.text = "♥ " + if (liked[0]) prevCount + 1 else maxOf(0, prevCount - 1)
+            countTv.text = "♥ " + if (liked[0]) fmtNum(prevCount + 1L) else fmtNum(maxOf(0, prevCount - 1).toLong())
             heartSet(heartIv, liked[0])
             database.child("posts").child(postId).runTransaction(object : Transaction.Handler {
                 override fun doTransaction(mutableData: MutableData): Transaction.Result {
@@ -380,16 +432,42 @@ class MainActivity : Activity() {
                     if (committed && data != null) {
                         val newCount = (data.child("likes").value as? Number)?.toInt() ?: 0
                         liked[0] = data.child("likedBy").child(currentUserId).value != null
-                        countTv.text = "♥ $newCount"
+                        countTv.text = "♥ " + fmtNum(newCount.toLong())
                         heartSet(heartIv, liked[0])
                     } else {
                         liked[0] = prevLiked
-                        countTv.text = "♥ $prevCount"
+                        countTv.text = "♥ " + fmtNum(prevCount.toLong())
                         heartSet(heartIv, prevLiked)
                     }
                 }
             })
         }
+    }
+
+    // ================= ПРОСМОТРЫ (1 на пользователя, серверная транзакция) =================
+    private fun incrementViews(postId: String, onDone: ((Long) -> Unit)?) {
+        if (currentUserId.isEmpty()) return
+        if (postId in viewedLocally) return
+        database.child("posts").child(postId).runTransaction(object : Transaction.Handler {
+            override fun doTransaction(mutableData: MutableData): Transaction.Result {
+                val views = (mutableData.child("views").value as? Number)?.toLong() ?: 0L
+                val viewedBy = mutableData.child("viewedBy")
+                if (viewedBy.child(currentUserId).value != null) {
+                    viewedLocally.add(postId)
+                    return Transaction.success(mutableData)
+                }
+                viewedBy.child(currentUserId).value = true
+                mutableData.child("views").value = views + 1
+                return Transaction.success(mutableData)
+            }
+            override fun onComplete(error: DatabaseError?, committed: Boolean, data: DataSnapshot?) {
+                if (committed && data != null) {
+                    val nv = (data.child("views").value as? Number)?.toLong() ?: 0L
+                    viewedLocally.add(postId)
+                    onDone?.invoke(nv)
+                }
+            }
+        })
     }
 
     private fun updatePostsNick(newNick: String) {
@@ -483,6 +561,8 @@ class MainActivity : Activity() {
                         override fun onDataChange(snapshot: DataSnapshot) {
                             currentNick = snapshot.child("nick").getValue(String::class.java) ?: "Аноним"
                             currentAvatar = snapshot.child("avatar").getValue(String::class.java) ?: ""
+                            currentEmail = snapshot.child("email").getValue(String::class.java) ?: (auth.currentUser?.email ?: "")
+                            saveAccount(currentUserId, currentNick, currentEmail)
                             if (::feedBlock.isInitialized && feedBlock.visibility == View.GONE) enterFeedMode()
                             if (::profileRoot.isInitialized) refreshProfile()
                         }
@@ -491,6 +571,7 @@ class MainActivity : Activity() {
             } else if (user == null && currentUserId.isNotEmpty()) {
                 currentUserId = ""
                 currentNick = ""
+                currentEmail = ""
                 currentAvatar = ""
                 if (::feedBlock.isInitialized) {
                     feedBlock.visibility = View.GONE
@@ -568,6 +649,7 @@ class MainActivity : Activity() {
         feedBlock.visibility = View.GONE
         feedBlock.setBackgroundColor(P.bg)
 
+        // Верх ленты: ТОЛЬКО лого (ник и карандаш убраны)
         val top = LinearLayout(this)
         top.orientation = LinearLayout.HORIZONTAL
         top.gravity = Gravity.CENTER_VERTICAL
@@ -575,12 +657,7 @@ class MainActivity : Activity() {
         val logoS = tv("Ahem", 20f, fBold, P.text)
         logoS.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
         wt(logoS, 1f)
-        feedHeader = tv("", 13f, fSemi, P.textSec)
-        feedHeader.layoutParams = lp(-2, LinearLayout.LayoutParams.WRAP_CONTENT, dp(12))
-        val switchIv = iconRound(R.drawable.ic_edit, P.text, dp(38))
         top.addView(logoS)
-        top.addView(feedHeader)
-        top.addView(switchIv)
 
         val composer = LinearLayout(this)
         composer.orientation = LinearLayout.VERTICAL
@@ -693,7 +770,9 @@ class MainActivity : Activity() {
                         database.child("users").child(userId).child("nick").setValue(nick)
                         currentUserId = userId
                         currentNick = nick
+                        currentEmail = email
                         viewingUserId = currentUserId
+                        saveAccount(userId, nick, email)
                         feedStatus.text = "Зарегистрирован!"
                         enterFeedMode()
                     } else {
@@ -707,7 +786,7 @@ class MainActivity : Activity() {
 
         logBtn.setOnClickListener {
             if (isLoggingIn) return@setOnClickListener
-            val email = feedEmail.text.toString()
+            val email = feedEmail.text.toString().trim()
             val pass = feedPass.text.toString()
             if (email.isEmpty() || pass.isEmpty()) {
                 feedStatus.text = "Email + пароль"
@@ -719,11 +798,13 @@ class MainActivity : Activity() {
                 if (task.isSuccessful) {
                     val userId = auth.currentUser?.uid ?: return@addOnCompleteListener
                     currentUserId = userId
+                    currentEmail = email
                     viewingUserId = currentUserId
                     database.child("users").child(userId).addListenerForSingleValueEvent(object : ValueEventListener {
                         override fun onDataChange(snapshot: DataSnapshot) {
                             currentNick = snapshot.child("nick").getValue(String::class.java) ?: "Аноним"
                             currentAvatar = snapshot.child("avatar").getValue(String::class.java) ?: ""
+                            saveAccount(userId, currentNick, email)
                             enterFeedMode()
                         }
                         override fun onCancelled(error: DatabaseError) {}
@@ -734,16 +815,6 @@ class MainActivity : Activity() {
                 isLoggingIn = false
                 logBtn.text = "Вход"
             }
-        }
-
-        switchIv.setOnClickListener {
-            auth.signOut()
-            feedBlock.visibility = View.GONE
-            authBlock.visibility = View.VISIBLE
-            feedStatus.text = "не залогинен"
-            currentUserId = ""
-            currentNick = ""
-            currentAvatar = ""
         }
 
         clearIv.setOnClickListener {
@@ -769,7 +840,9 @@ class MainActivity : Activity() {
             post["images"] = pendingImages.joinToString(",")
             post["timestamp"] = System.currentTimeMillis()
             post["likes"] = 0
+            post["views"] = 0
             post["likedBy"] = HashMap<String, Boolean>()
+            post["viewedBy"] = HashMap<String, Boolean>()
             database.child("posts").child(postId).setValue(post)
             feedPostText.setText("")
             pendingImages.clear()
@@ -795,7 +868,6 @@ class MainActivity : Activity() {
     private fun enterFeedMode() {
         authBlock.visibility = View.GONE
         feedBlock.visibility = View.VISIBLE
-        feedHeader.text = "@$currentNick"
         loadFeed()
     }
 
@@ -803,16 +875,16 @@ class MainActivity : Activity() {
         feedListener?.let { database.child("posts").removeEventListener(it) }
         feedBox.removeAllViews()
         lastFeedSig = ""
-        val imgW = resources.displayMetrics.widthPixels - dp(28)
 
-        feedListener = database.child("posts").orderByChild("timestamp").addValueEventListener(object : ValueEventListener {
+        // ФИКС: читаем children напрямую (без orderByChild) и сортируем на клиенте.
+        feedListener = database.child("posts").addValueEventListener(object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
                 val posts = ArrayList<DataSnapshot>()
                 for (child in snapshot.children) posts.add(child)
                 val sb = StringBuilder()
                 for (p in posts) {
                     sb.append(p.key).append('~')
-                    sb.append(p.child("timestamp").getValue(Long::class.java) ?: 0).append('~')
+                    sb.append(getTs(p)).append('~')
                     sb.append(p.child("authorNick").getValue(String::class.java) ?: "").append('~')
                     sb.append(p.child("text").getValue(String::class.java) ?: "").append('~')
                     sb.append(p.child("images").getValue(String::class.java) ?: "").append(';')
@@ -822,182 +894,12 @@ class MainActivity : Activity() {
                 lastFeedSig = sig
                 feedBox.removeAllViews()
 
-                val shown = posts.reversed().take(FEED_LIMIT)
-                for (post in shown) {
+                val sorted = posts.sortedByDescending { getTs(it) }.take(FEED_LIMIT)
+                for (post in sorted) {
                     try {
-                        val postId = post.key ?: ""
-                        val authorId = post.child("authorId").getValue(String::class.java) ?: ""
-                        val authorNick = post.child("authorNick").getValue(String::class.java) ?: "?"
-                        val text = post.child("text").getValue(String::class.java) ?: ""
-                        val imagesStr = post.child("images").getValue(String::class.java) ?: ""
-                        val ts = post.child("timestamp").getValue(Long::class.java) ?: 0
-                        val likeCount = (post.child("likes").value as? Number)?.toInt() ?: 0
-                        val timeStr = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(ts))
-
-                        val card = LinearLayout(this@MainActivity)
-                        card.orientation = LinearLayout.VERTICAL
-                        card.background = surf(18, filled = true)
-                        val cm2 = LinearLayout.LayoutParams(-1, LinearLayout.LayoutParams.WRAP_CONTENT)
-                        cm2.setMargins(dp(14), 0, dp(14), dp(12))
-                        card.layoutParams = cm2
-
-                        val header = LinearLayout(this@MainActivity)
-                        header.orientation = LinearLayout.HORIZONTAL
-                        header.setPadding(dp(14), dp(14), dp(14), dp(10))
-                        header.gravity = Gravity.CENTER_VERTICAL
-                        val avatarSize = dp(40)
-                        val avatarImg = ImageView(this@MainActivity)
-                        val avParams = LinearLayout.LayoutParams(avatarSize, avatarSize)
-                        avParams.marginEnd = dp(12)
-                        avatarImg.layoutParams = avParams
-                        avatarImg.scaleType = ImageView.ScaleType.FIT_CENTER
-                        if (avatarCache.containsKey(authorId)) {
-                            avatarImg.setImageBitmap(avatarCache[authorId])
-                        } else {
-                            avatarImg.setImageBitmap(makeCircularBitmap(createAvatarBitmap(authorNick), avatarSize))
-                            database.child("users").child(authorId).child("avatar")
-                                .addListenerForSingleValueEvent(object : ValueEventListener {
-                                    override fun onDataChange(avatarSnapshot: DataSnapshot) {
-                                        val s = avatarSnapshot.getValue(String::class.java) ?: ""
-                                        if (s.isNotEmpty()) {
-                                            val b = decodeScaled(s, avatarSize)
-                                            if (b != null) {
-                                                val circ = makeCircularBitmap(b, avatarSize)
-                                                avatarCache[authorId] = circ
-                                                avatarImg.setImageBitmap(circ)
-                                            }
-                                        }
-                                    }
-                                    override fun onCancelled(error: DatabaseError) {}
-                                })
-                        }
-                        avatarImg.setOnClickListener { openUserProfile(authorId, authorNick) }
-                        val nickTime = LinearLayout(this@MainActivity)
-                        nickTime.orientation = LinearLayout.VERTICAL
-                        val np = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT)
-                        np.weight = 1f
-                        nickTime.layoutParams = np
-                        val nickView = tv(authorNick, 15f, fSemi, P.text)
-                        nickView.setOnClickListener { openUserProfile(authorId, authorNick) }
-                        val timeView = tv(timeStr, 12f, fReg, P.textSec)
-                        nickTime.addView(nickView)
-                        nickTime.addView(timeView)
-                        header.addView(avatarImg)
-                        header.addView(nickTime)
-                        card.addView(header)
-
-                        if (text.isNotEmpty()) {
-                            val bt = TextView(this@MainActivity)
-                            bt.typeface = fReg
-                            bt.textSize = 15f
-                            bt.setTextColor(P.text)
-                            bt.setPadding(dp(14), 0, dp(14), dp(12))
-                            bt.layoutParams = lp(-1, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
-                            Linkify.addLinks(bt, Linkify.WEB_URLS)
-                            bt.movementMethod = android.text.method.LinkMovementMethod.getInstance()
-                            bt.setLinkTextColor(P.text)
-                            bt.text = text
-                            card.addView(bt)
-                        }
-
-                        if (imagesStr.isNotEmpty()) {
-                            val images = imagesStr.split(",").filter { it.isNotEmpty() }
-                            if (images.size == 1) {
-                                val b = decodeScaled(images[0], imgW)
-                                if (b != null) {
-                                    val box = FrameLayout(this@MainActivity)
-                                    val bm = LinearLayout.LayoutParams(-1, imgW)
-                                    bm.setMargins(dp(14), 0, dp(14), dp(12))
-                                    box.layoutParams = bm
-                                    box.background = surf(14, filled = true)
-                                    box.clipToOutline = true
-                                    val iv = ImageView(this@MainActivity)
-                                    iv.setImageBitmap(b)
-                                    iv.scaleType = ImageView.ScaleType.CENTER_CROP
-                                    iv.layoutParams = FrameLayout.LayoutParams(-1, -1)
-                                    iv.setOnClickListener { openViewer(images, 0) }
-                                    box.addView(iv)
-                                    card.addView(box)
-                                }
-                            } else {
-                                val grid = LinearLayout(this@MainActivity)
-                                grid.orientation = LinearLayout.VERTICAL
-                                val gm = LinearLayout.LayoutParams(-1, LinearLayout.LayoutParams.WRAP_CONTENT)
-                                gm.setMargins(dp(14), 0, dp(14), dp(12))
-                                grid.layoutParams = gm
-                                val cell = (imgW - dp(4)) / 2
-                                var ri = 0
-                                while (ri < images.size) {
-                                    val row = LinearLayout(this@MainActivity)
-                                    row.orientation = LinearLayout.HORIZONTAL
-                                    row.layoutParams = lp(-1, LinearLayout.LayoutParams.WRAP_CONTENT, dp(4))
-                                    for (ci in 0 until 2) {
-                                        val idx = ri + ci
-                                        if (idx < images.size) {
-                                            val b = decodeScaled(images[idx], cell)
-                                            if (b != null) {
-                                                val box = FrameLayout(this@MainActivity)
-                                                box.layoutParams = lp(0, cell, 0)
-                                                wt(box, 1f)
-                                                (box.layoutParams as LinearLayout.LayoutParams).marginEnd = if (ci == 0) dp(4) else 0
-                                                box.background = surf(12, filled = true)
-                                                box.clipToOutline = true
-                                                val iv = ImageView(this@MainActivity)
-                                                iv.setImageBitmap(b)
-                                                iv.scaleType = ImageView.ScaleType.CENTER_CROP
-                                                iv.layoutParams = FrameLayout.LayoutParams(-1, -1)
-                                                val kk = idx
-                                                iv.setOnClickListener { openViewer(images, kk) }
-                                                box.addView(iv)
-                                                row.addView(box)
-                                            } else {
-                                                val empty = View(this@MainActivity)
-                                                empty.layoutParams = lp(0, cell, 0)
-                                                wt(empty, 1f)
-                                                (empty.layoutParams as LinearLayout.LayoutParams).marginEnd = if (ci == 0) dp(4) else 0
-                                                row.addView(empty)
-                                            }
-                                        } else {
-                                            val empty = View(this@MainActivity)
-                                            empty.layoutParams = lp(0, cell, 0)
-                                            wt(empty, 1f)
-                                            (empty.layoutParams as LinearLayout.LayoutParams).marginEnd = if (ci == 0) dp(4) else 0
-                                            row.addView(empty)
-                                        }
-                                    }
-                                    grid.addView(row)
-                                    ri += 2
-                                }
-                                card.addView(grid)
-                            }
-                        }
-
-                        val act = LinearLayout(this@MainActivity)
-                        act.orientation = LinearLayout.HORIZONTAL
-                        act.setPadding(dp(14), dp(4), dp(14), dp(12))
-                        act.gravity = Gravity.CENTER_VERTICAL
-                        val heartIv = icon(R.drawable.ic_heart_outline, P.textSec, dp(24))
-                        val countTv = tv("♥ $likeCount", 14f, fSemi, P.text)
-                        (countTv.layoutParams as LinearLayout.LayoutParams).marginStart = dp(8)
-                        val likeBox = LinearLayout(this@MainActivity)
-                        likeBox.orientation = LinearLayout.HORIZONTAL
-                        likeBox.gravity = Gravity.CENTER_VERTICAL
-                        likeBox.addView(heartIv)
-                        likeBox.addView(countTv)
-                        val likedBy = post.child("likedBy").children.map { it.key }.toSet()
-                        attachLike(likeBox, countTv, heartIv, postId, currentUserId in likedBy)
-                        act.addView(likeBox)
-                        if (authorId != currentUserId) {
-                            val fb = btnOutline("+ @$authorNick")
-                            fb.textSize = 12f
-                            (fb.layoutParams as LinearLayout.LayoutParams).marginStart = dp(12)
-                            fb.setOnClickListener { addKnown(authorNick) }
-                            act.addView(fb)
-                        }
-                        card.addView(act)
-                        feedBox.addView(card)
+                        feedBox.addView(buildPostCard(post))
                     } catch (e: Exception) {
-                        // пропускаем проблемный пост, не роняя приложение
+                        // пропускаем проблемный пост
                     }
                 }
                 if (posts.isEmpty()) feedBox.addView(tv("Лента пуста", 15f, fMed, P.textSec))
@@ -1006,6 +908,244 @@ class MainActivity : Activity() {
                 Toast.makeText(this@MainActivity, "Ошибка: ${error.message}", Toast.LENGTH_SHORT).show()
             }
         })
+    }
+
+    // ================= ЕДИНАЯ КАРТОЧКА ПОСТА (лента + детальное окно) =================
+    private fun buildPostCard(post: DataSnapshot): View {
+        val postId = post.key ?: ""
+        val authorId = post.child("authorId").getValue(String::class.java) ?: ""
+        val authorNick = post.child("authorNick").getValue(String::class.java) ?: "?"
+        val text = post.child("text").getValue(String::class.java) ?: ""
+        val imagesStr = post.child("images").getValue(String::class.java) ?: ""
+        val ts = getTs(post)
+        val likeCount = (post.child("likes").value as? Number)?.toLong() ?: 0L
+        val viewCount = (post.child("views").value as? Number)?.toLong() ?: 0L
+        val timeStr = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(ts))
+        val imgW = resources.displayMetrics.widthPixels - dp(28)
+
+        val card = LinearLayout(this)
+        card.orientation = LinearLayout.VERTICAL
+        card.background = surf(18, filled = true)
+        val cm2 = LinearLayout.LayoutParams(-1, LinearLayout.LayoutParams.WRAP_CONTENT)
+        cm2.setMargins(dp(14), 0, dp(14), dp(12))
+        card.layoutParams = cm2
+
+        // Шапка
+        val header = LinearLayout(this)
+        header.orientation = LinearLayout.HORIZONTAL
+        header.setPadding(dp(14), dp(14), dp(14), dp(10))
+        header.gravity = Gravity.CENTER_VERTICAL
+        val avatarSize = dp(40)
+        val avatarImg = ImageView(this)
+        val avParams = LinearLayout.LayoutParams(avatarSize, avatarSize)
+        avParams.marginEnd = dp(12)
+        avatarImg.layoutParams = avParams
+        avatarImg.scaleType = ImageView.ScaleType.FIT_CENTER
+        if (avatarCache.containsKey(authorId)) {
+            avatarImg.setImageBitmap(avatarCache[authorId])
+        } else {
+            avatarImg.setImageBitmap(makeCircularBitmap(createAvatarBitmap(authorNick), avatarSize))
+            database.child("users").child(authorId).child("avatar")
+                .addListenerForSingleValueEvent(object : ValueEventListener {
+                    override fun onDataChange(avatarSnapshot: DataSnapshot) {
+                        val s = avatarSnapshot.getValue(String::class.java) ?: ""
+                        if (s.isNotEmpty()) {
+                            val b = decodeScaled(s, avatarSize)
+                            if (b != null) {
+                                val circ = makeCircularBitmap(b, avatarSize)
+                                avatarCache[authorId] = circ
+                                avatarImg.setImageBitmap(circ)
+                            }
+                        }
+                    }
+                    override fun onCancelled(error: DatabaseError) {}
+                })
+        }
+        avatarImg.setOnClickListener { openUserProfile(authorId, authorNick) }
+        val nickTime = LinearLayout(this)
+        nickTime.orientation = LinearLayout.VERTICAL
+        val np = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT)
+        np.weight = 1f
+        nickTime.layoutParams = np
+        val nickView = tv(authorNick, 15f, fSemi, P.text)
+        nickView.setOnClickListener { openUserProfile(authorId, authorNick) }
+        val timeView = tv(timeStr, 12f, fReg, P.textSec)
+        nickTime.addView(nickView)
+        nickTime.addView(timeView)
+        header.addView(avatarImg)
+        header.addView(nickTime)
+        card.addView(header)
+
+        // Текст
+        if (text.isNotEmpty()) {
+            val bt = TextView(this)
+            bt.typeface = fReg
+            bt.textSize = 15f
+            bt.setTextColor(P.text)
+            bt.setPadding(dp(14), 0, dp(14), dp(12))
+            bt.layoutParams = lp(-1, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
+            Linkify.addLinks(bt, Linkify.WEB_URLS)
+            bt.movementMethod = android.text.method.LinkMovementMethod.getInstance()
+            bt.setLinkTextColor(P.text)
+            bt.text = text
+            card.addView(bt)
+        }
+
+        // Фото
+        if (imagesStr.isNotEmpty()) {
+            val images = imagesStr.split(",").filter { it.isNotEmpty() }
+            if (images.size == 1) {
+                val b = decodeScaled(images[0], imgW)
+                if (b != null) {
+                    val box = FrameLayout(this)
+                    val bm = LinearLayout.LayoutParams(-1, imgW)
+                    bm.setMargins(dp(14), 0, dp(14), dp(12))
+                    box.layoutParams = bm
+                    box.background = surf(14, filled = true)
+                    box.clipToOutline = true
+                    val iv = ImageView(this)
+                    iv.setImageBitmap(b)
+                    iv.scaleType = ImageView.ScaleType.CENTER_CROP
+                    iv.layoutParams = FrameLayout.LayoutParams(-1, -1)
+                    iv.setOnClickListener { openViewer(images, 0) }
+                    box.addView(iv)
+                    card.addView(box)
+                }
+            } else {
+                val grid = LinearLayout(this)
+                grid.orientation = LinearLayout.VERTICAL
+                val gm = LinearLayout.LayoutParams(-1, LinearLayout.LayoutParams.WRAP_CONTENT)
+                gm.setMargins(dp(14), 0, dp(14), dp(12))
+                grid.layoutParams = gm
+                val cell = (imgW - dp(4)) / 2
+                var ri = 0
+                while (ri < images.size) {
+                    val row = LinearLayout(this)
+                    row.orientation = LinearLayout.HORIZONTAL
+                    row.layoutParams = lp(-1, LinearLayout.LayoutParams.WRAP_CONTENT, dp(4))
+                    for (ci in 0 until 2) {
+                        val idx = ri + ci
+                        if (idx < images.size) {
+                            val b = decodeScaled(images[idx], cell)
+                            if (b != null) {
+                                val box = FrameLayout(this)
+                                box.layoutParams = lp(0, cell, 0)
+                                wt(box, 1f)
+                                (box.layoutParams as LinearLayout.LayoutParams).marginEnd = if (ci == 0) dp(4) else 0
+                                box.background = surf(12, filled = true)
+                                box.clipToOutline = true
+                                val iv = ImageView(this)
+                                iv.setImageBitmap(b)
+                                iv.scaleType = ImageView.ScaleType.CENTER_CROP
+                                iv.layoutParams = FrameLayout.LayoutParams(-1, -1)
+                                val kk = idx
+                                iv.setOnClickListener { openViewer(images, kk) }
+                                box.addView(iv)
+                                row.addView(box)
+                            } else {
+                                val empty = View(this)
+                                empty.layoutParams = lp(0, cell, 0)
+                                wt(empty, 1f)
+                                (empty.layoutParams as LinearLayout.LayoutParams).marginEnd = if (ci == 0) dp(4) else 0
+                                row.addView(empty)
+                            }
+                        } else {
+                            val empty = View(this)
+                            empty.layoutParams = lp(0, cell, 0)
+                            wt(empty, 1f)
+                            (empty.layoutParams as LinearLayout.LayoutParams).marginEnd = if (ci == 0) dp(4) else 0
+                            row.addView(empty)
+                        }
+                    }
+                    grid.addView(row)
+                    ri += 2
+                }
+                card.addView(grid)
+            }
+        }
+
+        // Действия: лайк + просмотры + подписка
+        val act = LinearLayout(this)
+        act.orientation = LinearLayout.HORIZONTAL
+        act.setPadding(dp(14), dp(4), dp(14), dp(12))
+        act.gravity = Gravity.CENTER_VERTICAL
+
+        val heartIv = icon(R.drawable.ic_heart_outline, P.textSec, dp(22))
+        val countTv = tv("♥ " + fmtNum(likeCount), 14f, fSemi, P.text)
+        (countTv.layoutParams as LinearLayout.LayoutParams).marginStart = dp(6)
+        val likeBox = LinearLayout(this)
+        likeBox.orientation = LinearLayout.HORIZONTAL
+        likeBox.gravity = Gravity.CENTER_VERTICAL
+        likeBox.addView(heartIv)
+        likeBox.addView(countTv)
+        val likedBy = post.child("likedBy").children.mapNotNull { it.key }.toSet()
+        attachLike(likeBox, countTv, heartIv, postId, currentUserId in likedBy)
+        act.addView(likeBox)
+
+        val eyeIv = icon(R.drawable.ic_eye, P.textSec, dp(20))
+        val viewsTv = tv(fmtNum(viewCount), 13f, fMed, P.textSec)
+        (viewsTv.layoutParams as LinearLayout.LayoutParams).marginStart = dp(6)
+        (viewsTv.layoutParams as LinearLayout.LayoutParams).marginEnd = dp(6)
+        val viewsBox = LinearLayout(this)
+        viewsBox.orientation = LinearLayout.HORIZONTAL
+        viewsBox.gravity = Gravity.CENTER_VERTICAL
+        (viewsBox.layoutParams as LinearLayout.LayoutParams).marginStart = dp(16)
+        viewsBox.addView(eyeIv)
+        viewsBox.addView(viewsTv)
+        act.addView(viewsBox)
+
+        if (authorId != currentUserId && authorId.isNotEmpty()) {
+            val fb = btnOutline("+ @$authorNick")
+            fb.textSize = 12f
+            (fb.layoutParams as LinearLayout.LayoutParams).marginStart = dp(12)
+            fb.setOnClickListener { addKnown(authorNick) }
+            act.addView(fb)
+        }
+        card.addView(act)
+        return card
+    }
+
+    // ================= ДЕТАЛЬНОЕ ОКНО ПОСТА =================
+    private fun openPostDetail(post: DataSnapshot) {
+        val postId = post.key ?: ""
+        incrementViews(postId, null)
+        val dlg = Dialog(this, android.R.style.Theme_Black_NoTitleBar)
+        val outer = LinearLayout(this)
+        outer.orientation = LinearLayout.VERTICAL
+        outer.setBackgroundColor(P.bg)
+
+        val bar = LinearLayout(this)
+        bar.orientation = LinearLayout.HORIZONTAL
+        bar.gravity = Gravity.CENTER_VERTICAL
+        bar.setPadding(dp(8), dp(10), dp(14), dp(10))
+        val backIv = iconRound(R.drawable.ic_back, P.text, dp(38))
+        backIv.setOnClickListener { dlg.dismiss() }
+        val title = tv("Пост", 17f, fBold, P.text)
+        title.layoutParams = lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
+        wt(title, 1f)
+        (title.layoutParams as LinearLayout.LayoutParams).marginStart = dp(12)
+        bar.addView(backIv)
+        bar.addView(title)
+        outer.addView(bar)
+
+        val scroll = ScrollView(this)
+        scroll.isVerticalScrollBarEnabled = false
+        val holder = LinearLayout(this)
+        holder.orientation = LinearLayout.VERTICAL
+        holder.setPadding(0, dp(6), 0, dp(20))
+        try {
+            holder.addView(buildPostCard(post))
+        } catch (e: Exception) {
+            holder.addView(tv("Не удалось загрузить пост", 14f, fMed, P.textSec))
+        }
+        scroll.addView(holder)
+        val slp = LinearLayout.LayoutParams(-1, 0)
+        slp.weight = 1f
+        outer.addView(scroll, slp)
+
+        dlg.setContentView(outer)
+        dlg.window?.setLayout(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+        dlg.show()
     }
 
     private fun openUserProfile(userId: String, nick: String) {
@@ -1481,7 +1621,7 @@ class MainActivity : Activity() {
         return c
     }
 
-    // ================= НАСТРОЙКИ (переключатель темы) =================
+    // ================= НАСТРОЙКИ (тема + аккаунт) =================
     private fun showSettingsDialog() {
         val dlg = Dialog(this)
         dlg.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
@@ -1489,7 +1629,7 @@ class MainActivity : Activity() {
         root.orientation = LinearLayout.VERTICAL
         root.background = surf(20, filled = true)
         root.setPadding(dp(20), dp(18), dp(20), dp(20))
-        val width = (resources.displayMetrics.widthPixels * 0.86).toInt()
+        val width = (resources.displayMetrics.widthPixels * 0.88).toInt()
         val wrap = FrameLayout(this)
         val rlp = FrameLayout.LayoutParams(width, FrameLayout.LayoutParams.WRAP_CONTENT)
         rlp.gravity = Gravity.CENTER
@@ -1508,10 +1648,9 @@ class MainActivity : Activity() {
         head.addView(closeIv)
         root.addView(head)
 
-        val lbl = tv("Тема оформления", 13f, fMed, P.textSec)
-        lbl.layoutParams = lp(-1, -2, dp(10))
-        root.addView(lbl)
-
+        val themeLbl = tv("Тема оформления", 13f, fMed, P.textSec)
+        themeLbl.layoutParams = lp(-1, -2, dp(10))
+        root.addView(themeLbl)
         val darkNow = isDark()
         val lightOpt = themeOption("Светлая", !darkNow)
         lightOpt.setOnClickListener { setThemeAndRestart(false); dlg.dismiss() }
@@ -1523,9 +1662,124 @@ class MainActivity : Activity() {
         root.addView(gap)
         root.addView(darkOpt)
 
+        val sep = View(this)
+        sep.layoutParams = lp(-1, dp(1), dp(16))
+        sep.setBackgroundColor(P.border)
+        root.addView(sep)
+
+        val accLbl = tv("Аккаунт", 13f, fMed, P.textSec)
+        accLbl.layoutParams = lp(-1, -2, dp(10))
+        root.addView(accLbl)
+
+        val switchAcc = btnOutline("Сменить аккаунт")
+        switchAcc.layoutParams = lp(-1, -2, dp(8))
+        switchAcc.setOnClickListener { dlg.dismiss(); showAccountsDialog() }
+        root.addView(switchAcc)
+
+        val logout = btnOutline("Выйти из аккаунта")
+        logout.layoutParams = lp(-1, -2, 0)
+        (logout.layoutParams as LinearLayout.LayoutParams).topMargin = 0
+        logout.setOnClickListener {
+            dlg.dismiss()
+            auth.signOut()
+            showTab(0)
+        }
+        root.addView(logout)
+
         dlg.setContentView(wrap)
         dlg.window?.setLayout(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
         dlg.show()
+    }
+
+    private fun showAccountsDialog() {
+        val dlg = Dialog(this)
+        dlg.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+        val root = LinearLayout(this)
+        root.orientation = LinearLayout.VERTICAL
+        root.background = surf(20, filled = true)
+        root.setPadding(dp(20), dp(18), dp(20), dp(20))
+        val width = (resources.displayMetrics.widthPixels * 0.88).toInt()
+        val wrap = FrameLayout(this)
+        val rlp = FrameLayout.LayoutParams(width, FrameLayout.LayoutParams.WRAP_CONTENT)
+        rlp.gravity = Gravity.CENTER
+        wrap.addView(root, rlp)
+
+        val head = LinearLayout(this)
+        head.orientation = LinearLayout.HORIZONTAL
+        head.gravity = Gravity.CENTER_VERTICAL
+        head.layoutParams = lp(-1, -2, dp(16))
+        val backIv = iconRound(R.drawable.ic_back, P.text, dp(34))
+        backIv.setOnClickListener { dlg.dismiss(); showSettingsDialog() }
+        val title = tv("Аккаунты", 18f, fBold, P.text)
+        title.layoutParams = lp(0, -2, 0)
+        wt(title, 1f)
+        (title.layoutParams as LinearLayout.LayoutParams).marginStart = dp(12)
+        head.addView(backIv)
+        head.addView(title)
+        root.addView(head)
+
+        val accounts = loadAccounts()
+        if (accounts.isEmpty()) {
+            root.addView(tv("Нет сохранённых аккаунтов", 14f, fMed, P.textSec))
+        } else {
+            for (acc in accounts) {
+                val row = LinearLayout(this)
+                row.orientation = LinearLayout.HORIZONTAL
+                row.gravity = Gravity.CENTER_VERTICAL
+                row.background = if (acc.first == currentUserId) surf(12, filled = true) else surf(12, filled = false)
+                row.setPadding(dp(14), dp(12), dp(14), dp(12))
+                row.layoutParams = lp(-1, -2, dp(6))
+                row.addView(avatarView(null, dp(36), acc.second))
+                val box = LinearLayout(this)
+                box.orientation = LinearLayout.VERTICAL
+                val bp = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT)
+                bp.weight = 1f
+                bp.marginStart = dp(12)
+                box.layoutParams = bp
+                box.addView(tv(acc.second, 15f, fSemi, P.text))
+                box.addView(tv(acc.third, 12f, fReg, P.textSec))
+                row.addView(box)
+                if (acc.first == currentUserId) {
+                    val cur = tv("сейчас", 11f, fMed, P.textSec)
+                    row.addView(cur)
+                }
+                val targetEmail = acc.third
+                row.setOnClickListener {
+                    dlg.dismiss()
+                    switchToAccount(targetEmail)
+                }
+                root.addView(row)
+            }
+        }
+
+        val addBtn = btnAccent("Добавить аккаунт")
+        addBtn.layoutParams = lp(-1, -2, 0)
+        (addBtn.layoutParams as LinearLayout.LayoutParams).topMargin = dp(8)
+        addBtn.setOnClickListener {
+            dlg.dismiss()
+            switchToAccount("")
+        }
+        root.addView(addBtn)
+
+        dlg.setContentView(wrap)
+        dlg.window?.setLayout(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+        dlg.show()
+    }
+
+    private fun switchToAccount(email: String) {
+        auth.signOut()
+        currentUserId = ""
+        currentNick = ""
+        currentEmail = ""
+        currentAvatar = ""
+        showTab(0)
+        feedBlock.visibility = View.GONE
+        authBlock.visibility = View.VISIBLE
+        feedStatus.text = "вход / регистрация"
+        feedEmail.setText(email)
+        feedNick.setText("")
+        feedPass.setText("")
+        feedPass.requestFocus()
     }
 
     private fun themeOption(label: String, selected: Boolean): LinearLayout {
@@ -1631,7 +1885,7 @@ class MainActivity : Activity() {
                 if (newNick != currentNick) {
                     database.child("users").child(currentUserId).child("nick").setValue(newNick)
                     currentNick = newNick
-                    feedHeader.text = "@$newNick"
+                    saveAccount(currentUserId, newNick, currentEmail)
                     updatePostsNick(newNick)
                 }
                 database.child("users").child(currentUserId).child("bio").setValue(newBio)
@@ -1666,7 +1920,7 @@ class MainActivity : Activity() {
                 profileNick.text = "@$nick"
                 profileName.text = nick
                 profileBio.text = bio
-                profileFollowingCount.text = knownNames.size.toString()
+                profileFollowingCount.text = fmtNum(knownNames.size.toLong())
                 if (targetId == currentUserId) {
                     profileBtn1.text = "Редактировать профиль"
                     profileBtn1.setOnClickListener { showEditProfileDialog() }
@@ -1686,22 +1940,22 @@ class MainActivity : Activity() {
                 }
                 database.child("posts").addListenerForSingleValueEvent(object : ValueEventListener {
                     override fun onDataChange(ps: DataSnapshot) {
-                        var ownCount = 0
-                        var sumLikes = 0
+                        var ownCount = 0L
+                        var sumLikes = 0L
                         val grid = ArrayList<DataSnapshot>()
                         for (p in ps.children) {
                             val isMine = p.child("authorId").getValue(String::class.java) == targetId
                             val liked = p.child("likedBy").child(targetId).value != null
                             if (isMine) {
                                 ownCount++
-                                sumLikes += (p.child("likes").value as? Number)?.toInt() ?: 0
+                                sumLikes += (p.child("likes").value as? Number)?.toLong() ?: 0L
                             }
                             if (profileMode == 0 && isMine) grid.add(p)
                             if (profileMode == 1 && liked) grid.add(p)
                         }
-                        profilePostsCount.text = ownCount.toString()
+                        profilePostsCount.text = fmtNum(ownCount)
                         profileFollowersCount.text = "0"
-                        profileLikesCount.text = sumLikes.toString()
+                        profileLikesCount.text = fmtNum(sumLikes)
                         profilePostsGrid.removeAllViews()
                         if (grid.isEmpty()) {
                             val empty = tv(if (profileMode == 0) "Нет постов" else "Нет лайков", 14f, fMed, P.textSec)
@@ -1710,9 +1964,10 @@ class MainActivity : Activity() {
                             profilePostsGrid.addView(empty)
                             return
                         }
+                        val sortedGrid = grid.sortedByDescending { getTs(it) }
                         val cell = (resources.displayMetrics.widthPixels - dp(36) - dp(4)) / 3
                         var i = 0
-                        while (i < grid.size) {
+                        while (i < sortedGrid.size) {
                             val row = LinearLayout(this@MainActivity)
                             row.orientation = LinearLayout.HORIZONTAL
                             row.layoutParams = lp(-1, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
@@ -1722,13 +1977,13 @@ class MainActivity : Activity() {
                                 val p2 = LinearLayout.LayoutParams(cell, cell)
                                 p2.setMargins(0, 0, dp(2), dp(2))
                                 box.layoutParams = p2
-                                if (idx < grid.size) {
+                                if (idx < sortedGrid.size) {
                                     try {
-                                        val p = grid[idx]
+                                        val p = sortedGrid[idx]
                                         val postId = p.key ?: ""
                                         val imgStr = p.child("images").getValue(String::class.java) ?: ""
                                         val txt = p.child("text").getValue(String::class.java) ?: ""
-                                        val lc = (p.child("likes").value as? Number)?.toInt() ?: 0
+                                        val lc = (p.child("likes").value as? Number)?.toLong() ?: 0L
                                         if (imgStr.isNotEmpty()) {
                                             val first = imgStr.split(",").firstOrNull { it.isNotEmpty() }
                                             if (first != null) {
@@ -1738,8 +1993,6 @@ class MainActivity : Activity() {
                                                     iv.setImageBitmap(bb)
                                                     iv.scaleType = ImageView.ScaleType.CENTER_CROP
                                                     iv.layoutParams = FrameLayout.LayoutParams(-1, -1)
-                                                    val imgs = imgStr.split(",").filter { it.isNotEmpty() }
-                                                    iv.setOnClickListener { openViewer(imgs, 0) }
                                                     box.addView(iv)
                                                 }
                                             }
@@ -1750,13 +2003,16 @@ class MainActivity : Activity() {
                                             tt.setPadding(dp(6), dp(6), dp(6), dp(18))
                                             box.addView(tt)
                                         }
-                                        val likedBy = p.child("likedBy").children.map { it.key }.toSet()
+                                        // Тап по ячейке -> детальное окно поста
+                                        box.setOnClickListener { openPostDetail(p) }
+                                        // Сердечко поверх -> мгновенный лайк (не открывает деталь)
+                                        val likedBy = p.child("likedBy").children.mapNotNull { it.key }.toSet()
                                         val heartQuick = icon(R.drawable.ic_heart_outline, P.textSec, dp(18))
                                         val hp = FrameLayout.LayoutParams(dp(18), dp(18))
                                         hp.gravity = Gravity.TOP or Gravity.END
                                         hp.setMargins(0, dp(6), dp(6), 0)
                                         box.addView(heartQuick, hp)
-                                        val cntHidden = tv("♥ $lc", 12f, fSemi, P.text)
+                                        val cntHidden = tv("♥ " + fmtNum(lc), 12f, fSemi, P.text)
                                         attachLike(heartQuick, cntHidden, heartQuick, postId, currentUserId in likedBy)
                                     } catch (e: Exception) {
                                         // пропускаем ячейку
