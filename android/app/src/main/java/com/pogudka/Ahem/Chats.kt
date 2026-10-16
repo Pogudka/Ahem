@@ -1,4 +1,4 @@
- package com.pogudka.Ahem
+package com.pogudka.Ahem
 
 import android.content.Context
 import android.view.Gravity
@@ -187,8 +187,8 @@ internal fun buildChats(act: MainActivity): View {
     inputBar.orientation = LinearLayout.HORIZONTAL
     inputBar.gravity = Gravity.CENTER_VERTICAL
     val ibg = GlassDrawable()
-    ibg.setLiveBlur(true)
     ibg.setRadius(act.dp(26).toFloat())
+    ibg.setBlurRadius(act.dp(24).toFloat())
     ibg.setGlassTint(P.navGlass)
     ibg.setBorder(P.border, act.dp(1).toFloat())
     inputBar.background = ibg
@@ -219,7 +219,7 @@ internal fun buildChats(act: MainActivity): View {
     tab.addView(act.chatListRoot, FrameLayout.LayoutParams(-1, -1))
     tab.addView(act.convRoot, FrameLayout.LayoutParams(-1, -1))
 
-    ibg.attach(act.window, act.contentFrame, inputBar)
+    ibg.attach(act.contentFrame, inputBar)
 
     return tab
 }
