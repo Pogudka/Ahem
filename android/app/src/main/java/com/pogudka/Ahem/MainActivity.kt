@@ -43,7 +43,7 @@ class MainActivity : Activity() {
     internal lateinit var pendingInfo: TextView
     internal lateinit var pendingRow: LinearLayout
     internal lateinit var feedPostText: EditText
-    internal lateinit var feedFollowNick: EditText
+    internal lateinit var feedSearch: EditText
     internal lateinit var feedBox: LinearLayout
     internal lateinit var feedScroll: ScrollView
     internal lateinit var regBtn: TextView
@@ -55,6 +55,8 @@ class MainActivity : Activity() {
     internal val pendingImages = ArrayList<String>()
     internal var isRegistering = false
     internal var isLoggingIn = false
+    internal var feedQuery = ""
+    internal val lastPosts = ArrayList<DataSnapshot>()
 
     internal lateinit var ptrHeader: FrameLayout
     internal lateinit var ptrSpin: ImageView
@@ -75,6 +77,9 @@ class MainActivity : Activity() {
     internal lateinit var convScroll: ScrollView
     internal lateinit var msgField: EditText
     internal var currentChat = ""
+    internal var currentChatOtherUid = ""
+    internal var currentChatOtherNick = ""
+    internal var convListener: ValueEventListener? = null
 
     internal lateinit var profileRoot: LinearLayout
     internal lateinit var profileAvatar: ImageView
@@ -104,8 +109,13 @@ class MainActivity : Activity() {
     internal val ZOOM_MAX = 3f
     internal val FEED_LIMIT = 40
 
+    internal var profileGen = 0
+    internal var feedGen = 0
+
     private var authListener: FirebaseAuth.AuthStateListener? = null
     internal val avatarCache = HashMap<String, Bitmap>()
+    internal val imageCache = HashMap<String, Bitmap>()
+    internal val mediaCache = HashMap<String, String>()
     internal val viewedLocally = HashSet<String>()
     internal val statsMap = HashMap<String, DataSnapshot>()
     internal val myFollowingIds = HashSet<String>()
@@ -210,6 +220,9 @@ class MainActivity : Activity() {
                 viewingUserId = ""
                 viewingNick = ""
                 myFollowingIds.clear()
+                imageCache.clear()
+                avatarCache.clear()
+                mediaCache.clear()
                 if (::feedBlock.isInitialized) {
                     feedBlock.visibility = View.GONE
                     authBlock.visibility = View.VISIBLE
@@ -224,6 +237,7 @@ class MainActivity : Activity() {
         super.onDestroy()
         authListener?.let { auth.removeAuthStateListener(it) }
         ptrAnimator?.cancel()
+        convListener?.let { database.child("conversations").child(currentUserId).removeEventListener(it) }
     }
 
     internal fun showTab(i: Int, keep: Boolean = false) {
@@ -237,6 +251,7 @@ class MainActivity : Activity() {
             }
             refreshProfile(this)
         }
+        if (i == 2) loadConversations(this)
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {
