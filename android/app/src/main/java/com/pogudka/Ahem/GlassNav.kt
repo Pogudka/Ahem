@@ -40,6 +40,10 @@ internal class GlassDrawable : Drawable() {
     private val locEx = IntArray(2)
     private val locHost = IntArray(2)
 
+    // фиксированный коэффициент сжатия: НЕ равен радиусу блюра.
+    // 10 даёт tiny разумного размера и гладкий апскейл = реальное размытие.
+    private val DOWN = 10
+
     private val scrollListener = ViewTreeObserver.OnScrollChangedListener { requestRefresh() }
     private val layoutListener = ViewTreeObserver.OnGlobalLayoutListener { requestRefresh() }
 
@@ -82,9 +86,8 @@ internal class GlassDrawable : Drawable() {
         val h = ex.height
         if (w <= 0 || h <= 0) return
 
-        val div = blurRadius
-        val tw = (w / div).toInt().coerceAtLeast(2)
-        val th = (h / div).toInt().coerceAtLeast(2)
+        val tw = (w / DOWN).coerceAtLeast(2)
+        val th = (h / DOWN).coerceAtLeast(2)
 
         val localCap: Bitmap
         val ec = cap
@@ -106,10 +109,8 @@ internal class GlassDrawable : Drawable() {
         val dx = (locEx[0] - locHost[0]).toFloat()
         val dy = (locEx[1] - locHost[1]).toFloat()
 
-        // прячем саму пилюлю, чтобы в фон не попал её собственный полупрозрачный слой
         val oldVis = ex.visibility
         ex.visibility = View.INVISIBLE
-        // форс software-слоя на время кадра -> host.draw реально пишет пиксели в bitmap
         host.setLayerType(View.LAYER_TYPE_SOFTWARE, null)
         val cs = Canvas(localCap)
         cs.drawColor(0x00000000)
@@ -119,14 +120,19 @@ internal class GlassDrawable : Drawable() {
         host.setLayerType(View.LAYER_TYPE_NONE, null)
         ex.visibility = oldVis
 
+        // два прохода down->up для более мягкого блюра без额外 мусора
         rTiny.set(0f, 0f, tw.toFloat(), th.toFloat())
-        val ct = Canvas(localTiny)
-        ct.drawColor(0x00000000)
-        ct.drawBitmap(localCap, null, rTiny, paint)
         rect.set(0f, 0f, w.toFloat(), h.toFloat())
-        val co = Canvas(localOut)
-        co.drawColor(0x00000000)
-        co.drawBitmap(localTiny, null, rect, paint)
+        var cur: Bitmap = localCap
+        for (i in 0 until 2) {
+            val ct = Canvas(localTiny)
+            ct.drawColor(0x00000000)
+            ct.drawBitmap(cur, null, rTiny, paint)
+            val co = Canvas(localOut)
+            co.drawColor(0x00000000)
+            co.drawBitmap(localTiny, null, rect, paint)
+            cur = localOut
+        }
 
         blurred = localOut
         invalidateSelf()
