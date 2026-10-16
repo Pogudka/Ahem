@@ -229,7 +229,7 @@ internal fun openFollowList(act: MainActivity, targetUid: String, followers: Boo
             } catch (e: Exception) {
             }
         }
-        override fun onCancelled(error: DatabaseError) {}
+        override fun onCancelled(error: DatabaseError) { dbDenied(act, error) }
     })
 
     dlg.setContentView(outer)
@@ -389,6 +389,7 @@ internal fun switchToAccount(act: MainActivity, acc: Acc) {
     act.currentEmail = ""
     act.currentAvatar = ""
     act.myFollowingIds.clear()
+    act.imageCache.clear()
     act.showTab(0)
     act.feedBlock.visibility = View.GONE
     act.authBlock.visibility = View.VISIBLE
@@ -420,6 +421,7 @@ internal fun switchToManual(act: MainActivity) {
     act.currentEmail = ""
     act.currentAvatar = ""
     act.myFollowingIds.clear()
+    act.imageCache.clear()
     act.showTab(0)
     act.feedBlock.visibility = View.GONE
     act.authBlock.visibility = View.VISIBLE
@@ -553,27 +555,44 @@ internal fun showEditProfileDialog(act: MainActivity) {
 }
 
 internal fun refreshProfile(act: MainActivity) {
-    val targetId = if (act.viewingUserId.isNotEmpty()) act.viewingUserId else act.currentUserId
-    act.currentProfileTargetId = targetId
+    act.profileGen += 1
+    val gen = act.profileGen
+
+    act.profileNick.text = "@"
+    act.profileName.text = ""
+    act.profileBio.text = ""
+    act.profilePostsCount.text = "0"
+    act.profileLikesCount.text = "0"
+    act.profileFollowersCount.text = "0"
+    act.profileFollowingCount.text = "0"
+    act.profilePostsGrid.removeAllViews()
+    act.profileAvatar.setImageBitmap(makeCircularBitmap(createAvatarBitmap(act, ""), act.dp(84)))
+
     act.profileTabPosts.setColorFilter(if (act.profileMode == 0) P.text else P.navInactive)
     act.profileTabLikes.setColorFilter(if (act.profileMode == 1) P.accent else P.navInactive)
+
+    val targetId = if (act.viewingUserId.isNotEmpty()) act.viewingUserId else act.currentUserId
+    act.currentProfileTargetId = targetId
     if (targetId.isEmpty()) return
 
     act.database.child("followers").child(targetId).addListenerForSingleValueEvent(object : ValueEventListener {
         override fun onDataChange(snapshot: DataSnapshot) {
+            if (gen != act.profileGen) return
             try { act.profileFollowersCount.text = fmtNum(snapshot.children.count().toLong()) } catch (e: Exception) {}
         }
-        override fun onCancelled(error: DatabaseError) {}
+        override fun onCancelled(error: DatabaseError) { dbDenied(act, error) }
     })
     act.database.child("following").child(targetId).addListenerForSingleValueEvent(object : ValueEventListener {
         override fun onDataChange(snapshot: DataSnapshot) {
+            if (gen != act.profileGen) return
             try { act.profileFollowingCount.text = fmtNum(snapshot.children.count().toLong()) } catch (e: Exception) {}
         }
-        override fun onCancelled(error: DatabaseError) {}
+        override fun onCancelled(error: DatabaseError) { dbDenied(act, error) }
     })
 
     act.database.child("users").child(targetId).addListenerForSingleValueEvent(object : ValueEventListener {
         override fun onDataChange(snapshot: DataSnapshot) {
+            if (gen != act.profileGen) return
             try {
                 val nick = snapshot.child("nick").getValue(String::class.java) ?: "?"
                 val avatar = snapshot.child("avatar").getValue(String::class.java) ?: ""
@@ -606,6 +625,7 @@ internal fun refreshProfile(act: MainActivity) {
                 var stSnap: DataSnapshot? = null
                 var done = false
                 fun finish() {
+                    if (gen != act.profileGen) return
                     if (done) return
                     done = true
                     act.statsMap.clear()
@@ -652,27 +672,29 @@ internal fun refreshProfile(act: MainActivity) {
                                 try {
                                     val p = sortedGrid[idx]
                                     val postId = p.key ?: ""
-                                    val imgStr = p.child("images").getValue(String::class.java) ?: ""
                                     val txt = p.child("text").getValue(String::class.java) ?: ""
                                     val lc = (act.statsMap[postId]?.child("likes")?.value as? Number)?.toLong() ?: 0L
-                                    if (imgStr.isNotEmpty()) {
-                                        val first = imgStr.split(",").firstOrNull { it.isNotEmpty() }
-                                        if (first != null) {
-                                            val bb = decodeScaled(first, cell)
-                                            if (bb != null) {
-                                                val iv = ImageView(act)
-                                                iv.setImageBitmap(bb)
-                                                iv.scaleType = ImageView.ScaleType.CENTER_CROP
-                                                iv.layoutParams = FrameLayout.LayoutParams(-1, -1)
-                                                box.addView(iv)
+                                    box.background = surf(act, 6, filled = true)
+                                    val tt = tv(act, txt, 11f, act.fMed, P.text)
+                                    tt.maxLines = 6
+                                    tt.setPadding(act.dp(6), act.dp(6), act.dp(6), act.dp(18))
+                                    box.addView(tt)
+                                    mediaFor(act, postId) { str ->
+                                        try {
+                                            val first = str.split(",").firstOrNull { it.isNotEmpty() }
+                                            if (first != null) {
+                                                val bb = decodeCached(act, first, cell, "pg$postId")
+                                                if (bb != null) {
+                                                    box.removeAllViews()
+                                                    val iv = ImageView(act)
+                                                    iv.setImageBitmap(bb)
+                                                    iv.scaleType = ImageView.ScaleType.CENTER_CROP
+                                                    iv.layoutParams = FrameLayout.LayoutParams(-1, -1)
+                                                    box.addView(iv)
+                                                }
                                             }
+                                        } catch (e: Exception) {
                                         }
-                                    } else {
-                                        box.background = surf(act, 6, filled = true)
-                                        val tt = tv(act, txt, 11f, act.fMed, P.text)
-                                        tt.maxLines = 6
-                                        tt.setPadding(act.dp(6), act.dp(6), act.dp(6), act.dp(18))
-                                        box.addView(tt)
                                     }
                                     box.setOnClickListener { openPostDetail(act, p) }
                                     val liked = act.statsMap[postId]?.child("likedBy")?.child(act.currentUserId)?.value != null
@@ -694,15 +716,15 @@ internal fun refreshProfile(act: MainActivity) {
                 }
                 postsRef.addListenerForSingleValueEvent(object : ValueEventListener {
                     override fun onDataChange(snapshot: DataSnapshot) { psSnap = snapshot; finish() }
-                    override fun onCancelled(error: DatabaseError) { psSnap = null; finish() }
+                    override fun onCancelled(error: DatabaseError) { psSnap = null; dbDenied(act, error); finish() }
                 })
                 statsRef.addListenerForSingleValueEvent(object : ValueEventListener {
                     override fun onDataChange(snapshot: DataSnapshot) { stSnap = snapshot; finish() }
-                    override fun onCancelled(error: DatabaseError) { stSnap = null; finish() }
+                    override fun onCancelled(error: DatabaseError) { stSnap = null; dbDenied(act, error); finish() }
                 })
             } catch (e: Exception) {
             }
         }
-        override fun onCancelled(error: DatabaseError) {}
+        override fun onCancelled(error: DatabaseError) { dbDenied(act, error) }
     })
 }
