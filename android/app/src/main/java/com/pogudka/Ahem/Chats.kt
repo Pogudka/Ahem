@@ -14,48 +14,58 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-private fun msgText(m: DataSnapshot): String {
+private fun msgText(m: DataSnapshot): String = try {
     val known = arrayOf("text", "message", "body", "content", "msg", "m", "value", "val")
+    var r = ""
     for (k in known) {
         val v = m.child(k).getValue(String::class.java)
-        if (!v.isNullOrEmpty()) return v
+        if (!v.isNullOrEmpty()) { r = v; break }
     }
-    for (c in m.children) {
-        val v = c.value
-        if (v is String && v.isNotEmpty()) return v
+    if (r.isEmpty()) {
+        for (c in m.children) {
+            val v = c.value
+            if (v is String && v.isNotEmpty()) { r = v; break }
+        }
     }
-    val direct = m.value
-    if (direct is String && direct.isNotEmpty()) return direct
-    return ""
-}
+    if (r.isEmpty()) {
+        val direct = m.value
+        if (direct is String && direct.isNotEmpty()) r = direct
+    }
+    r
+} catch (e: Exception) { "" }
 
-private fun msgTs(m: DataSnapshot): Long {
+private fun msgTs(m: DataSnapshot): Long = try {
     val known = arrayOf("ts", "timestamp", "time", "createdAt", "created", "date", "at", "sentAt")
+    var r = 0L
     for (k in known) {
         val v = m.child(k).value
-        if (v is Number) return v.toLong()
+        if (v is Number) { r = v.toLong(); break }
         val s = (v as? String)?.toLongOrNull()
-        if (s != null) return s
+        if (s != null) { r = s; break }
     }
-    for (c in m.children) {
-        val v = c.value
-        if (v is Number && v.toLong() > 1_000_000_000_000L) return v.toLong()
-        val s = (v as? String)?.toLongOrNull()
-        if (s != null && s > 1_000_000_000_000L) return s
+    if (r == 0L) {
+        for (c in m.children) {
+            val v = c.value
+            if (v is Number && v.toLong() > 1_000_000_000_000L) { r = v.toLong(); break }
+            val s = (v as? String)?.toLongOrNull()
+            if (s != null && s > 1_000_000_000_000L) { r = s; break }
+        }
     }
-    return 0L
-}
+    r
+} catch (e: Exception) { 0L }
 
-private fun msgNick(m: DataSnapshot): String {
+private fun msgNick(m: DataSnapshot): String = try {
     val known = arrayOf("nick", "senderNick", "authorNick", "fromNick", "name", "user")
+    var r = ""
     for (k in known) {
         val v = m.child(k).getValue(String::class.java)
-        if (!v.isNullOrEmpty()) return v
+        if (!v.isNullOrEmpty()) { r = v; break }
     }
-    return ""
-}
+    r
+} catch (e: Exception) { "" }
 
-private fun msgMine(m: DataSnapshot, myUid: String, boxIsMine: Boolean): Boolean {
+// плоский узел диалога: направление строго по отправителю; фолбэк на mine; иначе чужое
+private fun msgMine(m: DataSnapshot, myUid: String): Boolean = try {
     val uidKeys = arrayOf("senderUid", "from", "uid", "sender", "author", "userId", "owner", "by")
     for (k in uidKeys) {
         val v = m.child(k).getValue(String::class.java) ?: ""
@@ -66,8 +76,8 @@ private fun msgMine(m: DataSnapshot, myUid: String, boxIsMine: Boolean): Boolean
         val v = m.child(k).getValue(Boolean::class.java)
         if (v != null) return v
     }
-    return boxIsMine
-}
+    false
+} catch (e: Exception) { false }
 
 internal fun buildChats(act: MainActivity): View {
     val tab = FrameLayout(act)
@@ -189,33 +199,19 @@ internal fun buildChats(act: MainActivity): View {
     tab.addView(act.chatListRoot, FrameLayout.LayoutParams(-1, -1))
     tab.addView(act.convRoot, FrameLayout.LayoutParams(-1, -1))
 
-    ibg.attach(act.contentFrame, inputBar)
+    ibg.attach(act.window, act.contentFrame, inputBar)
 
     return tab
 }
 
 internal fun closeConversation(act: MainActivity) {
-    act.convListener?.let {
-        act.database.child("conversations").child(act.currentUserId).child(act.currentChat)
-            .removeEventListener(it)
-    }
-    act.convListener2?.let {
-        act.database.child("conversations").child(act.currentChat).child(act.currentUserId)
-            .removeEventListener(it)
-    }
-    act.convLegacyListeners?.forEach { lv ->
-        // снять нельзя без ссылки на ref; храним пары ref+listener ниже
-    }
-    act.convLegacyRefs?.let { refs ->
-        act.convLegacyListeners?.forEachIndexed { i, lv -> refs.getOrNull(i)?.removeEventListener(lv) }
-    }
+    try {
+        act.convListener?.let {
+            act.database.child("conversations").child(act.currentChat).removeEventListener(it)
+        }
+    } catch (e: Exception) {}
     act.convListener = null
-    act.convListener2 = null
-    act.convLegacyListeners = null
-    act.convLegacyRefs = null
-    act.chatSnapMine = null
-    act.chatSnapPeer = null
-    act.chatLegacySnaps = HashMap()
+    act.chatSnap = null
     act.currentChat = ""
     act.currentChatOtherUid = ""
     act.currentChatOtherNick = ""
@@ -235,85 +231,39 @@ internal fun openChat(act: MainActivity, peerUid: String, peerNick: String) {
     act.convRoot.visibility = View.VISIBLE
     act.setNavVisible(false)
     act.convBox.removeAllViews()
-    act.chatSnapMine = null
-    act.chatSnapPeer = null
-    act.chatLegacySnaps = HashMap()
+    act.chatSnap = null
 
-    act.convListener?.let {
-        act.database.child("conversations").child(act.currentUserId).child(peerUid).removeEventListener(it)
-    }
-    act.convListener2?.let {
-        act.database.child("conversations").child(peerUid).child(act.currentUserId).removeEventListener(it)
-    }
+    try {
+        act.convListener?.let {
+            act.database.child("conversations").child(peerUid).removeEventListener(it)
+        }
+    } catch (e: Exception) {}
 
-    val boxMine = act.database.child("conversations").child(act.currentUserId).child(peerUid)
-    val boxPeer = act.database.child("conversations").child(peerUid).child(act.currentUserId)
-
-    val l1 = object : ValueEventListener {
-        override fun onDataChange(s: DataSnapshot) { act.chatSnapMine = s; renderMergedChat(act) }
+    val ref = act.database.child("conversations").child(peerUid)
+    val l = object : ValueEventListener {
+        override fun onDataChange(s: DataSnapshot) {
+            act.chatSnap = s
+            try { renderConversation(act, s) } catch (e: Exception) {}
+        }
         override fun onCancelled(error: DatabaseError) { dbDenied(act, error) }
     }
-    val l2 = object : ValueEventListener {
-        override fun onDataChange(s: DataSnapshot) { act.chatSnapPeer = s; renderMergedChat(act) }
-        override fun onCancelled(error: DatabaseError) { dbDenied(act, error) }
-    }
-    act.convListener = l1
-    act.convListener2 = l2
-    boxMine.addValueEventListener(l1)
-    boxPeer.addValueEventListener(l2)
-
-    // фолбэк: плоский общий узел пары (старая схема). пробуем разные разделители/порядок.
-    val me = act.currentUserId
-    val seps = listOf("_", "", "-", ".", ":")
-    val keys = LinkedHashSet<String>()
-    for (s in seps) { keys.add("$me$s$peerUid"); keys.add("$peerUid$s$me") }
-    val legacyListeners = ArrayList<ValueEventListener>()
-    val legacyRefs = ArrayList<com.google.firebase.database.DatabaseReference>()
-    for (k in keys) {
-        val ref = act.database.child("conversations").child(k)
-        val lv = object : ValueEventListener {
-            override fun onDataChange(s: DataSnapshot) {
-                if (s.exists()) { act.chatLegacySnaps[k] = s; renderMergedChat(act) }
-            }
-            override fun onCancelled(error: DatabaseError) {}
-        }
-        legacyListeners.add(lv); legacyRefs.add(ref)
-        ref.addListenerForSingleValueEvent(lv)
-    }
-    act.convLegacyListeners = legacyListeners
-    act.convLegacyRefs = legacyRefs
+    act.convListener = l
+    ref.addValueEventListener(l)
 }
 
-private fun renderMergedChat(act: MainActivity) {
-    val items = ArrayList<Pair<DataSnapshot, Boolean>>()
-    val seen = HashSet<String>()
-    fun add(s: DataSnapshot?, boxIsMine: Boolean) {
-        if (s == null) return
-        for (c in s.children) {
-            val key = msgTs(c).toString() + "|" + msgText(c)
-            if (key in seen) continue
-            seen.add(key)
-            items.add(Pair(c, msgMine(c, act.currentUserId, boxIsMine)))
-        }
-    }
-    add(act.chatSnapMine, true)
-    add(act.chatSnapPeer, false)
-    if (items.isEmpty() && act.chatSnapMine != null && act.chatSnapPeer != null) {
-        for ((_, s) in act.chatLegacySnaps) add(s, false)
-    }
-    items.sortBy { msgTs(it.first) }
-    renderConversation(act, items)
-}
-
-internal fun renderConversation(act: MainActivity, items: List<Pair<DataSnapshot, Boolean>>) {
+internal fun renderConversation(act: MainActivity, snapshot: DataSnapshot) {
     act.convBox.removeAllViews()
     val df = SimpleDateFormat("HH:mm", Locale.getDefault())
     val maxW = (act.resources.displayMetrics.widthPixels * 0.78).toInt()
+    val list = ArrayList<DataSnapshot>()
+    for (c in snapshot.children) list.add(c)
+    list.sortBy { msgTs(it) }
     var drawn = 0
-    for ((m, mine) in items) {
+    for (m in list) {
         val text = msgText(m)
         if (text.isEmpty()) continue
         val ts = msgTs(m)
+        val mine = msgMine(m, act.currentUserId)
         drawn++
         val row = LinearLayout(act)
         row.orientation = LinearLayout.HORIZONTAL
@@ -360,7 +310,7 @@ internal fun renderConversation(act: MainActivity, items: List<Pair<DataSnapshot
         }
         act.convBox.addView(row)
     }
-    if (drawn == 0 && act.chatSnapMine != null && act.chatSnapPeer != null) {
+    if (drawn == 0) {
         val empty = tv(act, "Нет сообщений", 14f, act.fMed, P.textSec)
         empty.gravity = Gravity.CENTER
         empty.setPadding(0, act.dp(40), 0, act.dp(40))
@@ -375,21 +325,21 @@ internal fun sendMessage(act: MainActivity) {
     if (text.isEmpty()) return
     val now = System.currentTimeMillis()
     val peer = act.currentChat
-    val base = act.database.child("conversations")
-    val key1 = base.child(act.currentUserId).child(peer).push().key ?: return
-    val m1 = HashMap<String, Any>()
-    m1["text"] = text; m1["message"] = text; m1["body"] = text
-    m1["ts"] = now; m1["timestamp"] = now; m1["createdAt"] = now
-    m1["mine"] = true; m1["senderUid"] = act.currentUserId; m1["uid"] = act.currentUserId
-    m1["from"] = act.currentUserId; m1["nick"] = act.currentNick
-    base.child(act.currentUserId).child(peer).child(key1).setValue(m1)
-    val key2 = base.child(peer).child(act.currentUserId).push().key ?: return
-    val m2 = HashMap<String, Any>()
-    m2["text"] = text; m2["message"] = text; m2["body"] = text
-    m2["ts"] = now; m2["timestamp"] = now; m2["createdAt"] = now
-    m2["mine"] = false; m2["senderUid"] = act.currentUserId; m2["uid"] = act.currentUserId
-    m2["from"] = act.currentUserId; m2["nick"] = act.currentNick
-    base.child(peer).child(act.currentUserId).child(key2).setValue(m2)
+    val ref = act.database.child("conversations").child(peer)
+    val key = ref.push().key ?: return
+    val m = HashMap<String, Any>()
+    m["text"] = text
+    m["message"] = text
+    m["body"] = text
+    m["ts"] = now
+    m["timestamp"] = now
+    m["createdAt"] = now
+    m["senderUid"] = act.currentUserId
+    m["uid"] = act.currentUserId
+    m["from"] = act.currentUserId
+    m["mine"] = true
+    m["nick"] = act.currentNick
+    ref.child(key).setValue(m)
     act.msgField.setText("")
 }
 
@@ -403,11 +353,13 @@ internal fun loadConversations(act: MainActivity) {
         override fun onDataChange(uSnap: DataSnapshot) {
             val nickMap = HashMap<String, String>()
             val avatarMap = HashMap<String, String>()
-            for (u in uSnap.children) {
-                val uid = u.key ?: continue
-                nickMap[uid] = u.child("nick").getValue(String::class.java) ?: "?"
-                avatarMap[uid] = u.child("avatar").getValue(String::class.java) ?: ""
-            }
+            try {
+                for (u in uSnap.children) {
+                    val uid = u.key ?: continue
+                    nickMap[uid] = u.child("nick").getValue(String::class.java) ?: "?"
+                    avatarMap[uid] = u.child("avatar").getValue(String::class.java) ?: ""
+                }
+            } catch (e: Exception) {}
             loadConvRows(act, nickMap, avatarMap)
         }
         override fun onCancelled(error: DatabaseError) {
@@ -417,7 +369,8 @@ internal fun loadConversations(act: MainActivity) {
 }
 
 private fun loadConvRows(act: MainActivity, nickMap: HashMap<String, String>, avatarMap: HashMap<String, String>) {
-    act.database.child("conversations").child(act.currentUserId).addListenerForSingleValueEvent(object : ValueEventListener {
+    // плоская схема: дети conversations = uid собеседников
+    act.database.child("conversations").addListenerForSingleValueEvent(object : ValueEventListener {
         override fun onDataChange(snapshot: DataSnapshot) {
             try {
                 act.chatListRows.removeAllViews()
@@ -478,8 +431,7 @@ private fun loadConvRows(act: MainActivity, nickMap: HashMap<String, String>, av
                     row.setOnClickListener { openChat(act, uid, nick) }
                     act.chatListRows.addView(row)
                 }
-            } catch (e: Exception) {
-            }
+            } catch (e: Exception) {}
         }
         override fun onCancelled(error: DatabaseError) {
             act.chatStatus.text = "ошибка загрузки"
