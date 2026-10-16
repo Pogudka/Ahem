@@ -159,25 +159,6 @@ class MainActivity : Activity() {
     internal fun setNavVisible(v: Boolean) {
         if (!::navWrap.isInitialized) return
         navWrap.visibility = if (v) View.VISIBLE else View.GONE
-        glassNav?.requestRefresh()
-    }
-
-    private fun hookGlassScroll() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
-        val refresh = object : View.OnScrollChangeListener {
-            override fun onScrollChange(v: View?, sx: Int, sy: Int, ox: Int, oy: Int) {
-                glassNav?.requestRefresh()
-            }
-        }
-        if (::feedScroll.isInitialized) feedScroll.setOnScrollChangeListener(refresh)
-        if (::profileScroll.isInitialized) profileScroll.setOnScrollChangeListener(refresh)
-        if (::convScroll.isInitialized) convScroll.setOnScrollChangeListener(refresh)
-    }
-
-    private fun pumpGlass() {
-        uiHandler.postDelayed({ glassNav?.requestRefresh() }, 350)
-        uiHandler.postDelayed({ glassNav?.requestRefresh() }, 900)
-        uiHandler.postDelayed({ glassNav?.requestRefresh() }, 1600)
     }
 
     internal fun saveSessionPrefs() {
@@ -228,8 +209,8 @@ class MainActivity : Activity() {
         navWrap.layoutParams = nwp
 
         val glass = GlassDrawable()
-        glass.setLiveBlur(true)
         glass.setRadius(dp(28).toFloat())
+        glass.setBlurRadius(dp(30).toFloat())
         glass.setGlassTint(P.navGlass)
         glass.setBorder(P.border, dp(1).toFloat())
         glassNav = glass
@@ -263,9 +244,7 @@ class MainActivity : Activity() {
         convBox.setPadding(0, 0, 0, dp(8))
         chatListRows.setPadding(0, 0, 0, navSpace)
 
-        glass.attach(window, contentFrame, navWrap)
-        hookGlassScroll()
-        pumpGlass()
+        glass.attach(contentFrame, navWrap)
 
         showTab(0)
 
@@ -292,7 +271,6 @@ class MainActivity : Activity() {
                             saveSessionPrefs()
                             if (::profileRoot.isInitialized) refreshProfile(this@MainActivity)
                             renderFeed(this@MainActivity)
-                            pumpGlass()
                         }
                         override fun onCancelled(error: DatabaseError) { dbDenied(this@MainActivity, error) }
                     })
@@ -335,7 +313,6 @@ class MainActivity : Activity() {
         for (idx in tabs.indices) tabs[idx].visibility = if (idx == i) View.VISIBLE else View.GONE
         for (idx in 0 until 4) navIcons[idx].setColorFilter(if (idx == i) P.accent else P.navInactive)
         setNavVisible(true)
-        uiHandler.postDelayed({ glassNav?.requestRefresh() }, 300)
         if (i == 3) {
             if (!keep) {
                 viewingUserId = currentUserId
