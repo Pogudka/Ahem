@@ -46,13 +46,6 @@ internal fun mediaFor(act: MainActivity, postId: String, cb: (String) -> Unit) {
     })
 }
 
-internal fun openViewerByPost(act: MainActivity, postId: String, start: Int) {
-    mediaFor(act, postId) { str ->
-        val images = str.split(",").filter { it.isNotEmpty() }
-        if (images.isNotEmpty()) openViewer(act, images, start)
-    }
-}
-
 internal fun buildFeed(act: MainActivity): View {
     val col = LinearLayout(act)
     col.orientation = LinearLayout.VERTICAL
@@ -462,6 +455,7 @@ internal fun loadFeed(act: MainActivity, onDone: (() -> Unit)? = null) {
 }
 
 internal fun renderFeed(act: MainActivity) {
+    act.viewsTvMap.clear()
     act.feedBox.removeAllViews()
     val q = act.feedQuery.lowercase()
     val sorted = act.lastPosts.sortedByDescending { getTs(it) }
@@ -557,10 +551,10 @@ internal fun buildPostCard(act: MainActivity, post: DataSnapshot, onViewsReady: 
         bt.setTextColor(P.text)
         bt.setPadding(act.dp(14), 0, act.dp(14), act.dp(12))
         bt.layoutParams = act.lp(-1, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
+        bt.text = text
         Linkify.addLinks(bt, Linkify.WEB_URLS)
         bt.movementMethod = android.text.method.LinkMovementMethod.getInstance()
         bt.setLinkTextColor(P.text)
-        bt.text = text
         card.addView(bt)
     }
 
@@ -600,6 +594,8 @@ internal fun buildPostCard(act: MainActivity, post: DataSnapshot, onViewsReady: 
     viewsTvLp.marginStart = act.dp(6)
     viewsTvLp.marginEnd = act.dp(6)
     viewsTv.layoutParams = viewsTvLp
+    val reg = act.viewsTvMap.getOrPut(postId) { ArrayList() }
+    reg.add(viewsTv)
     val viewsBox = LinearLayout(act)
     viewsBox.orientation = LinearLayout.HORIZONTAL
     viewsBox.gravity = Gravity.CENTER_VERTICAL
