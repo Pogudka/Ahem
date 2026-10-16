@@ -730,6 +730,7 @@ internal fun openPostDetail(act: MainActivity, post: DataSnapshot) {
     dlg.show()
 }
 
+// просмотр фото: только изображение + снизу текст "N / M" без фона; листание свайпом; зум пинчем; закрытие по Back
 internal fun openViewer(act: MainActivity, images: List<String>, start: Int) {
     if (images.isEmpty()) return
     val dlg = Dialog(act, android.R.style.Theme_Black_NoTitleBar_Fullscreen)
@@ -739,28 +740,12 @@ internal fun openViewer(act: MainActivity, images: List<String>, start: Int) {
     img.scaleType = ImageView.ScaleType.MATRIX
     frame.addView(img, FrameLayout.LayoutParams(-1, -1))
 
-    val back = glassChip(act, "←", act.dp(48), 0xFFFFFFFF.toInt())
-    val blp = FrameLayout.LayoutParams(act.dp(48), act.dp(48))
-    blp.gravity = Gravity.TOP or Gravity.START
-    blp.setMargins(act.dp(14), act.dp(14), 0, 0)
-    frame.addView(back, blp)
-    back.setOnClickListener { dlg.dismiss() }
-
-    val prev = glassChip(act, "‹", act.dp(56), 0xFFFFFFFF.toInt())
-    val plp = FrameLayout.LayoutParams(act.dp(56), act.dp(56))
-    plp.gravity = Gravity.START or Gravity.CENTER_VERTICAL
-    plp.setMargins(act.dp(10), 0, 0, 0)
-    frame.addView(prev, plp)
-
-    val next = glassChip(act, "›", act.dp(56), 0xFFFFFFFF.toInt())
-    val nlp = FrameLayout.LayoutParams(act.dp(56), act.dp(56))
-    nlp.gravity = Gravity.END or Gravity.CENTER_VERTICAL
-    nlp.setMargins(0, 0, act.dp(10), 0)
-    frame.addView(next, nlp)
-
-    val cnt = glassChip(act, "", act.dp(0), 0xFFFFFFFF.toInt())
+    val cnt = TextView(act)
     cnt.textSize = 15f
-    cnt.setPadding(act.dp(18), act.dp(10), act.dp(18), act.dp(10))
+    cnt.typeface = act.fSemi
+    cnt.setTextColor(0xFFFFFFFF.toInt())
+    cnt.setShadowLayer(act.dp(4).toFloat(), 0f, 0f, 0xAA000000.toInt())
+    cnt.gravity = Gravity.CENTER
     val clp = FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT)
     clp.gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
     clp.setMargins(0, 0, 0, act.dp(28))
@@ -821,17 +806,6 @@ internal fun openViewer(act: MainActivity, images: List<String>, start: Int) {
             img.post { setup(b) }
         }
         cnt.text = "${idx + 1} / ${images.size}"
-        prev.alpha = if (idx > 0) 1f else 0.3f
-        next.alpha = if (idx < images.size - 1) 1f else 0.3f
-        prev.isEnabled = idx > 0
-        next.isEnabled = idx < images.size - 1
-    }
-
-    prev.setOnClickListener {
-        if (idx > 0) { idx--; show() }
-    }
-    next.setOnClickListener {
-        if (idx < images.size - 1) { idx++; show() }
     }
 
     val sgd = ScaleGestureDetector(act, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
@@ -845,12 +819,21 @@ internal fun openViewer(act: MainActivity, images: List<String>, start: Int) {
     val gd = GestureDetector(act, object : GestureDetector.SimpleOnGestureListener() {
         override fun onDown(e: MotionEvent): Boolean = true
         override fun onScroll(e1: MotionEvent?, e2: MotionEvent, dx: Float, dy: Float): Boolean {
-            if (scale > minS + 0.001f) {
+            if (scale > minS + 0.01f) {
                 panX -= dx
                 panY -= dy
                 applyM()
             }
             return true
+        }
+        override fun onFling(e1: MotionEvent?, e2: MotionEvent, vx: Float, vy: Float): Boolean {
+            if (scale > minS + 0.01f) return false
+            if (Math.abs(vx) < Math.abs(vy)) return false
+            val threshold = act.dp(60).toFloat()
+            if (Math.abs(vx) < threshold) return false
+            if (vx < 0 && idx < images.size - 1) { idx++; show(); return true }
+            if (vx > 0 && idx > 0) { idx--; show(); return true }
+            return false
         }
     })
 
