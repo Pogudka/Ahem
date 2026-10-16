@@ -7,6 +7,7 @@ import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.drawable.Drawable
@@ -14,15 +15,18 @@ import android.os.Handler
 import android.os.Looper
 import android.view.View
 import android.view.ViewTreeObserver
+import android.view.Window
+import android.window.PixelCopy
 
 internal class GlassDrawable : Drawable() {
 
-    private var sourceRoot: View? = null
+    private var window: Window? = null
     private var excludeView: View? = null
     private var liveBlur = true
     private var blurred: Bitmap? = null
     private var src: Bitmap? = null
     private var tiny: Bitmap? = null
+    private var out: Bitmap? = null
 
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val tintPaint = Paint()
@@ -37,25 +41,24 @@ internal class GlassDrawable : Drawable() {
     private val handler = Handler(Looper.getMainLooper())
     private var pending = false
     private val locSelf = IntArray(2)
-    private val locRoot = IntArray(2)
 
     private val scrollListener = ViewTreeObserver.OnScrollChangedListener { requestRefresh() }
     private val layoutListener = ViewTreeObserver.OnGlobalLayoutListener { requestRefresh() }
 
     fun setLiveBlur(v: Boolean) { liveBlur = v }
 
-    fun attach(root: View, exclude: View) {
-        sourceRoot = root
+    fun attach(win: Window, exclude: View) {
+        window = win
         excludeView = exclude
         if (liveBlur) {
-            root.viewTreeObserver.addOnScrollChangedListener(scrollListener)
-            root.viewTreeObserver.addOnGlobalLayoutListener(layoutListener)
+            win.decorView.viewTreeObserver.addOnScrollChangedListener(scrollListener)
+            win.decorView.viewTreeObserver.addOnGlobalLayoutListener(layoutListener)
             requestRefresh()
         }
     }
 
     fun setRadius(r: Float) { radius = r }
-    fun setBlurRadius(px: Float) { blurRadius = px.coerceIn(4f, 30f) }
+    fun setBlurRadius(px: Float) { blurRadius = px.coerceIn(4f, 40f) }
     fun setGlassTint(color: Int) { tintPaint.color = color }
 
     fun setBorder(color: Int, widthPx: Float) {
@@ -74,15 +77,14 @@ internal class GlassDrawable : Drawable() {
     }
 
     private fun refresh() {
-        val root = sourceRoot ?: return
+        val win = window ?: return
         val ex = excludeView ?: return
         if (ex.visibility != View.VISIBLE) return
         val w = ex.width
         val h = ex.height
         if (w <= 0 || h <= 0) return
 
-        // сильный блюр: даунсэмпл в blurRadius раз + апскейл с фильтром
-        val div = blurRadius
+        val div = blurRadius.coerceAtLeast(4f)
         val tw = (w / div).toInt().coerceAtLeast(2)
         val th = (h / div).toInt().coerceAtLeast(2)
 
@@ -96,30 +98,35 @@ internal class GlassDrawable : Drawable() {
         if (et != null && et.width == tw && et.height == th) localTiny = et
         else { localTiny = Bitmap.createBitmap(tw, th, Bitmap.Config.ARGB_8888); tiny = localTiny }
 
+        val localOut: Bitmap
+        val eo = out
+        if (eo != null && eo.width == w && eo.height == h) localOut = eo
+        else { localOut = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888); out = localOut }
+
         ex.getLocationInWindow(locSelf)
-        root.getLocationInWindow(locRoot)
-        val dx = (locSelf[0] - locRoot[0]).toFloat()
-        val dy = (locSelf[1] - locRoot[1]).toFloat()
-        val oldVis = ex.visibility
-        ex.visibility = View.INVISIBLE
-        val cs = Canvas(localSrc)
-        cs.drawColor(0x00000000)
-        cs.translate(-dx, -dy)
-        cs.clipRect(0f, 0f, w.toFloat(), h.toFloat())
-        try { root.draw(cs) } catch (e: Exception) {}
-        ex.visibility = oldVis
+        val srcRect = Rect(locSelf[0], locSelf[1], locSelf[0] + w, locSelf[1] + h)
 
-        rTiny.set(0f, 0f, tw.toFloat(), th.toFloat())
-        val ct = Canvas(localTiny)
+        try {
+            PixelCopy.request(win, srcRect, localSrc, object : PixelCopy.OnPixelCopyFinishedListener {
+                override fun onPixelCopyFinished(result: Int) {
+                    if (result == PixelCopy.SUCCESS) blurAndShow(localSrc, localTiny, localOut)
+                }
+            }, handler)
+        } catch (e: Exception) {
+            // окно ещё не готово к копированию — следующий request перекроет
+        }
+    }
+
+    private fun blurAndShow(s: Bitmap, t: Bitmap, o: Bitmap) {
+        rTiny.set(0f, 0f, t.width.toFloat(), t.height.toFloat())
+        val ct = Canvas(t)
         ct.drawColor(0x00000000)
-        ct.drawBitmap(localSrc, null, rTiny, paint)
-
-        val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-        val co = Canvas(out)
+        ct.drawBitmap(s, null, rTiny, paint)
+        rect.set(0f, 0f, o.width.toFloat(), o.height.toFloat())
+        val co = Canvas(o)
         co.drawColor(0x00000000)
-        rect.set(0f, 0f, w.toFloat(), h.toFloat())
-        co.drawBitmap(localTiny, null, rect, paint)
-        blurred = out
+        co.drawBitmap(t, null, rect, paint)
+        blurred = o
         invalidateSelf()
     }
 
