@@ -147,8 +147,27 @@ class MainActivity : Activity() {
         if (n.isNotEmpty() && n != me()) knownNames.add(n)
     }
 
-    private fun parseCount(t: TextView): Int =
-        t.text.toString().substringAfter("♥").trim().replace("K", "000").replace("M", "000000").toIntOrNull() ?: 0
+    // ПАРСИНГ СЧЁТЧИКА С ПОДДЕРЖКОЙ K / M (фикс лайков на округлённых числах)
+    private fun parseCount(t: TextView): Int {
+        val s = t.text.toString().substringAfter("♥").trim()
+        if (s.isEmpty()) return 0
+        var numberPart = s
+        var multiplier = 1L
+        if (numberPart.endsWith("M", ignoreCase = true)) {
+            multiplier = 1_000_000L
+            numberPart = numberPart.dropLast(1)
+        } else if (numberPart.endsWith("K", ignoreCase = true)) {
+            multiplier = 1_000L
+            numberPart = numberPart.dropLast(1)
+        }
+        val value = numberPart.toDoubleOrNull() ?: return 0
+        val result = (value * multiplier).toLong()
+        return when {
+            result > Int.MAX_VALUE -> Int.MAX_VALUE
+            result < 0 -> 0
+            else -> result.toInt()
+        }
+    }
 
     // ================= ГРАФИКА =================
     private fun surf(radius: Int, filled: Boolean = true): GradientDrawable {
@@ -365,6 +384,7 @@ class MainActivity : Activity() {
     private val viewedLocally = HashSet<String>()
 
     // ================= МУЛЬТИАККАУНТ (SharedPreferences) =================
+    // ФИКС: filter() возвращает неизменяемый List без add() -> явный цикл на ArrayList
     private fun saveAccount(uid: String, nick: String, email: String) {
         if (uid.isEmpty()) return
         val prefs = getSharedPreferences("ahem", Context.MODE_PRIVATE)
@@ -373,11 +393,20 @@ class MainActivity : Activity() {
         for (rec in raw.split("\u0002")) {
             if (rec.isEmpty()) continue
             val parts = rec.split("\u0001")
-            if (parts.size == 3) list.add(Triple(parts[0], parts[1], parts[2]))
+            if (parts.size == 3) {
+                list.add(Triple(parts[0], parts[1], parts[2]))
+            }
         }
-        val filtered = list.filter { it.first != uid }
+        val filtered = ArrayList<Triple<String, String, String>>()
+        for (acc in list) {
+            if (acc.first != uid) {
+                filtered.add(acc)
+            }
+        }
         filtered.add(Triple(uid, nick, email))
-        val out = filtered.joinToString("\u0002") { "${it.first}\u0001${it.second}\u0001${it.third}" }
+        val out = filtered.joinToString("\u0002") {
+            "${it.first}\u0001${it.second}\u0001${it.third}"
+        }
         prefs.edit().putString("accounts", out).apply()
     }
 
@@ -876,7 +905,7 @@ class MainActivity : Activity() {
         feedBox.removeAllViews()
         lastFeedSig = ""
 
-        // ФИКС: читаем children напрямую (без orderByChild) и сортируем на клиенте.
+        // ФИКС ленты: читаем children напрямую (без orderByChild) и сортируем на клиенте
         feedListener = database.child("posts").addValueEventListener(object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
                 val posts = ArrayList<DataSnapshot>()
@@ -930,7 +959,6 @@ class MainActivity : Activity() {
         cm2.setMargins(dp(14), 0, dp(14), dp(12))
         card.layoutParams = cm2
 
-        // Шапка
         val header = LinearLayout(this)
         header.orientation = LinearLayout.HORIZONTAL
         header.setPadding(dp(14), dp(14), dp(14), dp(10))
@@ -976,7 +1004,6 @@ class MainActivity : Activity() {
         header.addView(nickTime)
         card.addView(header)
 
-        // Текст
         if (text.isNotEmpty()) {
             val bt = TextView(this)
             bt.typeface = fReg
@@ -991,7 +1018,6 @@ class MainActivity : Activity() {
             card.addView(bt)
         }
 
-        // Фото
         if (imagesStr.isNotEmpty()) {
             val images = imagesStr.split(",").filter { it.isNotEmpty() }
             if (images.size == 1) {
@@ -1064,7 +1090,6 @@ class MainActivity : Activity() {
             }
         }
 
-        // Действия: лайк + просмотры + подписка
         val act = LinearLayout(this)
         act.orientation = LinearLayout.HORIZONTAL
         act.setPadding(dp(14), dp(4), dp(14), dp(12))
@@ -1678,7 +1703,6 @@ class MainActivity : Activity() {
 
         val logout = btnOutline("Выйти из аккаунта")
         logout.layoutParams = lp(-1, -2, 0)
-        (logout.layoutParams as LinearLayout.LayoutParams).topMargin = 0
         logout.setOnClickListener {
             dlg.dismiss()
             auth.signOut()
@@ -2003,9 +2027,7 @@ class MainActivity : Activity() {
                                             tt.setPadding(dp(6), dp(6), dp(6), dp(18))
                                             box.addView(tt)
                                         }
-                                        // Тап по ячейке -> детальное окно поста
                                         box.setOnClickListener { openPostDetail(p) }
-                                        // Сердечко поверх -> мгновенный лайк (не открывает деталь)
                                         val likedBy = p.child("likedBy").children.mapNotNull { it.key }.toSet()
                                         val heartQuick = icon(R.drawable.ic_heart_outline, P.textSec, dp(18))
                                         val hp = FrameLayout.LayoutParams(dp(18), dp(18))
