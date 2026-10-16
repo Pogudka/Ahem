@@ -88,7 +88,11 @@ class MainActivity : Activity() {
     internal var currentChatOtherUid = ""
     internal var currentChatOtherNick = ""
     internal var convListener: ValueEventListener? = null
-    internal var chatSnap: DataSnapshot? = null
+    internal var convListener2: ValueEventListener? = null
+    internal var convListener3: ValueEventListener? = null
+    internal var chatSnapMine: DataSnapshot? = null
+    internal var chatSnapPeer: DataSnapshot? = null
+    internal var chatSnapFlat: DataSnapshot? = null
 
     internal lateinit var profileRoot: LinearLayout
     internal lateinit var profileAvatar: ImageView
@@ -328,7 +332,9 @@ class MainActivity : Activity() {
         authListener?.let { auth.removeAuthStateListener(it) }
         ptrAnimator?.cancel()
         try {
-            convListener?.let { database.child("conversations").child(currentChat).removeEventListener(it) }
+            convListener?.let { database.child("conversations").child(currentUserId).child(currentChat).removeEventListener(it) }
+            convListener2?.let { database.child("conversations").child(currentChat).child(currentUserId).removeEventListener(it) }
+            convListener3?.let { database.child("conversations").child(currentChat).removeEventListener(it) }
         } catch (e: Exception) {}
     }
 
