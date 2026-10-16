@@ -45,7 +45,7 @@ internal class GlassDrawable : Drawable() {
         radius = r
     }
 
-    fun setTint(color: Int) {
+    fun setGlassTint(color: Int) {
         tintPaint.color = color
     }
 
