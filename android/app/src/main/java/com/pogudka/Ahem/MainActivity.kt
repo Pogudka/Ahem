@@ -209,8 +209,9 @@ class MainActivity : Activity() {
         navWrap.layoutParams = nwp
 
         val glass = GlassDrawable()
+        glass.setLiveBlur(true)
         glass.setRadius(dp(28).toFloat())
-        glass.setBlurLevel(4)
+        glass.setBlurLevel(3)
         glass.setGlassTint(P.navGlass)
         glass.setBorder(P.border, dp(1).toFloat())
         glassNav = glass
