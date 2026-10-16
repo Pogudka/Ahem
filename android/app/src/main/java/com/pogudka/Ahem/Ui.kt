@@ -115,11 +115,27 @@ internal fun iconRound(act: MainActivity, res: Int, tint: Int, size: Int): Image
     iv.layoutParams = act.lp(size, size, 0)
     iv.setPadding(act.dp(9), act.dp(9), act.dp(9), act.dp(9))
     val g = GlassDrawable()
+    g.setLiveBlur(false)
     g.setRadius(size / 2f)
-    g.setBlurLevel(2)
     g.setGlassTint(P.navGlass)
     g.setBorder(P.border, act.dp(1).toFloat())
     iv.background = g
-    g.attach(act.rootFrame, iv)
     return iv
+}
+
+internal fun glassChip(act: MainActivity, symbol: String, size: Int, textColor: Int): TextView {
+    val t = TextView(act)
+    t.text = symbol
+    t.textSize = (size * 0.42f)
+    t.typeface = act.fBold
+    t.setTextColor(textColor)
+    t.gravity = Gravity.CENTER
+    t.layoutParams = act.lp(size, size, 0)
+    val g = GlassDrawable()
+    g.setLiveBlur(false)
+    g.setRadius(size / 2f)
+    g.setGlassTint(P.navGlass)
+    g.setBorder(0x55FFFFFF, act.dp(1).toFloat())
+    t.background = g
+    return t
 }
