@@ -74,7 +74,7 @@ internal fun followUser(act: MainActivity, targetUid: String, targetNick: String
     fr.child("ts").setValue(now)
     act.myFollowingIds.add(targetUid)
     Toast.makeText(act, "Подписаны на $targetNick", Toast.LENGTH_SHORT).show()
-    if (::act.profileRoot.isInitialized) refreshProfile(act)
+    refreshProfile(act)
 }
 
 internal fun followByNick(act: MainActivity, nickRaw: String) {
