@@ -25,6 +25,7 @@ internal object P {
     var navInactive = 0xFF9A9AA0.toInt()
     var heartOn = 0xFF000000.toInt()
     var scrim = 0x66000000.toInt()
+    var navGlass = 0x80FFFFFF.toInt()
 }
 
 internal fun applyTheme(ctx: Context, dark: Boolean) {
@@ -40,6 +41,7 @@ internal fun applyTheme(ctx: Context, dark: Boolean) {
         P.navInactive = 0xFF7C7C82.toInt()
         P.heartOn = 0xFFFFFFFF.toInt()
         P.scrim = 0x99000000.toInt()
+        P.navGlass = 0x80141414.toInt()
     } else {
         P.bg = 0xFFFFFFFF.toInt()
         P.surface = 0xFFF7F7F9.toInt()
@@ -52,6 +54,7 @@ internal fun applyTheme(ctx: Context, dark: Boolean) {
         P.navInactive = 0xFF9A9AA0.toInt()
         P.heartOn = 0xFF000000.toInt()
         P.scrim = 0x66000000.toInt()
+        P.navGlass = 0x80FFFFFF.toInt()
     }
 }
 
@@ -59,9 +62,7 @@ internal fun isDark(ctx: Context): Boolean =
     ctx.getSharedPreferences("ahem", Context.MODE_PRIVATE).getBoolean("dark", false)
 
 internal fun dbDenied(act: MainActivity, error: DatabaseError) {
-    if (error.message.contains("Permission denied", ignoreCase = true)) {
-        Toast.makeText(act, "Нет доступа к БД: обнови Rules в Firebase Console", Toast.LENGTH_LONG).show()
-    }
+    Toast.makeText(act, "Ошибка БД: " + error.message, Toast.LENGTH_LONG).show()
 }
 
 internal fun trimNum(d: Double): String {
