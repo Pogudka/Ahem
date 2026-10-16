@@ -1,17 +1,19 @@
 package com.pogudka.Ahem
 
-import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.ColorFilter
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.PixelFormat
 import android.graphics.RectF
+import android.graphics.drawable.Drawable
 import android.os.Handler
 import android.os.Looper
 import android.view.View
 import android.view.ViewTreeObserver
 
-internal class BlurGlassView(context: Context) : View(context) {
+internal class GlassDrawable : Drawable() {
 
     private var sourceRoot: View? = null
     private var excludeView: View? = null
@@ -39,6 +41,10 @@ internal class BlurGlassView(context: Context) : View(context) {
         requestRefresh()
     }
 
+    fun setRadius(r: Float) {
+        radius = r
+    }
+
     fun setTint(color: Int) {
         tintPaint.color = color
     }
@@ -47,10 +53,6 @@ internal class BlurGlassView(context: Context) : View(context) {
         borderPaint.color = color
         borderPaint.style = Paint.Style.STROKE
         borderPaint.strokeWidth = widthPx
-    }
-
-    fun setRadius(r: Float) {
-        radius = r
     }
 
     fun requestRefresh() {
@@ -65,8 +67,8 @@ internal class BlurGlassView(context: Context) : View(context) {
     private fun refresh() {
         val root = sourceRoot ?: return
         val ex = excludeView ?: return
-        val w = width
-        val h = height
+        val w = ex.width
+        val h = ex.height
         if (w <= 0 || h <= 0) return
         val sw = Math.max(1, w / 6)
         val sh = Math.max(1, h / 6)
@@ -98,29 +100,30 @@ internal class BlurGlassView(context: Context) : View(context) {
         val c2 = Canvas(out)
         c2.drawBitmap(small, null, RectF(0f, 0f, sw2.toFloat(), sh2.toFloat()), paint)
         blurred = out
-        invalidate()
+        invalidateSelf()
     }
 
-    override fun onDraw(canvas: Canvas) {
+    override fun draw(canvas: Canvas) {
         val b = blurred
-        rect.set(0f, 0f, width.toFloat(), height.toFloat())
+        val w = bounds.width().toFloat()
+        val h = bounds.height().toFloat()
+        if (w <= 0f || h <= 0f) return
+        rect.set(0f, 0f, w, h)
         path.reset()
         path.addRoundRect(rect, radius, radius, Path.Direction.CCW)
         canvas.save()
         canvas.clipPath(path)
         if (b != null) {
-            canvas.drawBitmap(b, null, RectF(0f, 0f, width.toFloat(), height.toFloat()), paint)
+            canvas.drawBitmap(b, null, rect, paint)
         }
         canvas.drawRect(rect, tintPaint)
         canvas.restore()
         canvas.drawPath(path, borderPaint)
-        super.onDraw(canvas)
     }
 
-    override fun onDetachedFromWindow() {
-        super.onDetachedFromWindow()
-        sourceRoot?.viewTreeObserver?.removeOnScrollChangedListener(scrollListener)
-        sourceRoot?.viewTreeObserver?.removeOnGlobalLayoutListener(layoutListener)
-        handler.removeCallbacksAndMessages(null)
-    }
+    override fun setAlpha(alpha: Int) {}
+
+    override fun setColorFilter(colorFilter: ColorFilter?) {}
+
+    override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
 }
