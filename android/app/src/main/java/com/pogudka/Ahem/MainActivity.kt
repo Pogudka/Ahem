@@ -88,12 +88,7 @@ class MainActivity : Activity() {
     internal var currentChatOtherUid = ""
     internal var currentChatOtherNick = ""
     internal var convListener: ValueEventListener? = null
-    internal var convListener2: ValueEventListener? = null
-    internal var convLegacyListeners: ArrayList<ValueEventListener>? = null
-    internal var convLegacyRefs: ArrayList<DatabaseReference>? = null
-    internal var chatSnapMine: DataSnapshot? = null
-    internal var chatSnapPeer: DataSnapshot? = null
-    internal var chatLegacySnaps: HashMap<String, DataSnapshot> = HashMap()
+    internal var chatSnap: DataSnapshot? = null
 
     internal lateinit var profileRoot: LinearLayout
     internal lateinit var profileAvatar: ImageView
@@ -269,7 +264,7 @@ class MainActivity : Activity() {
         convBox.setPadding(0, 0, 0, dp(8))
         chatListRows.setPadding(0, 0, 0, navSpace)
 
-        glass.attach(contentFrame, navWrap)
+        glass.attach(window, contentFrame, navWrap)
         hookGlassScroll()
         pumpGlass()
 
@@ -332,11 +327,9 @@ class MainActivity : Activity() {
         super.onDestroy()
         authListener?.let { auth.removeAuthStateListener(it) }
         ptrAnimator?.cancel()
-        convListener?.let { database.child("conversations").child(currentUserId).removeEventListener(it) }
-        convListener2?.let { database.child("conversations").removeEventListener(it) }
-        convLegacyRefs?.let { refs ->
-            convLegacyListeners?.forEachIndexed { i, lv -> refs.getOrNull(i)?.removeEventListener(lv) }
-        }
+        try {
+            convListener?.let { database.child("conversations").child(currentChat).removeEventListener(it) }
+        } catch (e: Exception) {}
     }
 
     internal fun showTab(i: Int, keep: Boolean = false) {
