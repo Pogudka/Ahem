@@ -7,21 +7,25 @@ import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.drawable.Drawable
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.view.View
 import android.view.ViewTreeObserver
+import android.view.Window
+import android.window.PixelCopy
 
 internal class GlassDrawable : Drawable() {
 
+    private var window: Window? = null
     private var hostView: View? = null
     private var excludeView: View? = null
     private var liveBlur = true
     private var blurred: Bitmap? = null
-    private var cap: Bitmap? = null
     private var tiny: Bitmap? = null
     private var out: Bitmap? = null
 
@@ -37,18 +41,16 @@ internal class GlassDrawable : Drawable() {
     private val handler = Handler(Looper.getMainLooper())
     private var pending = false
     private val locEx = IntArray(2)
-    private val locHost = IntArray(2)
 
-    // коэффициент сжатия фона. 4 в два прохода => эффективное размытие ~16px,
-    // но tiny остаётся приличного размера (не превращается в однотонную плашку).
-    private val DIV = 4
+    private val DIV = 8
 
     private val scrollListener = ViewTreeObserver.OnScrollChangedListener { requestRefresh() }
     private val layoutListener = ViewTreeObserver.OnGlobalLayoutListener { requestRefresh() }
 
     fun setLiveBlur(v: Boolean) { liveBlur = v }
 
-    fun attach(host: View, exclude: View) {
+    fun attach(win: Window, host: View, exclude: View) {
+        window = win
         hostView = host
         excludeView = exclude
         if (liveBlur) {
@@ -59,7 +61,7 @@ internal class GlassDrawable : Drawable() {
     }
 
     fun setRadius(r: Float) { radius = r }
-    fun setBlurRadius(px: Float) { /* сила задаётся DIV,这个方法 оставлен для совместимости вызовов */ }
+    fun setBlurRadius(px: Float) { /* сила = DIV; метод для совместимости вызовов */ }
     fun setGlassTint(color: Int) { tintPaint.color = color }
 
     fun setBorder(color: Int, widthPx: Float) {
@@ -74,11 +76,10 @@ internal class GlassDrawable : Drawable() {
     fun requestRefresh() {
         if (!liveBlur || pending) return
         pending = true
-        handler.postDelayed({ pending = false; refresh() }, 130)
+        handler.postDelayed({ pending = false; refresh() }, 120)
     }
 
     private fun refresh() {
-        val host = hostView ?: return
         val ex = excludeView ?: return
         if (ex.visibility != View.VISIBLE) return
         val w = ex.width
@@ -87,11 +88,6 @@ internal class GlassDrawable : Drawable() {
 
         val tw = (w / DIV).coerceAtLeast(2)
         val th = (h / DIV).coerceAtLeast(2)
-
-        val localCap: Bitmap
-        val ec = cap
-        if (ec != null && ec.width == w && ec.height == h) localCap = ec
-        else { localCap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888); cap = localCap }
 
         val localTiny: Bitmap
         val et = tiny
@@ -103,34 +99,63 @@ internal class GlassDrawable : Drawable() {
         if (eo != null && eo.width == w && eo.height == h) localOut = eo
         else { localOut = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888); out = localOut }
 
-        // ВАЖНО: никаких setLayerType / PixelCopy / рефлексии.
-        // contentFrame НЕ содержит пилюлю (пилюля — её сосед в rootFrame),
-        // поэтому прятать exclude не нужно и нельзя (это ломало захват раньше).
         ex.getLocationInWindow(locEx)
-        host.getLocationInWindow(locHost)
-        val dx = (locEx[0] - locHost[0]).toFloat()
-        val dy = (locEx[1] - locHost[1]).toFloat()
+        val srcRect = Rect(locEx[0], locEx[1], locEx[0] + w, locEx[1] + h)
 
-        val cs = Canvas(localCap)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            pixelCopy(srcRect, localTiny, localOut, w, h)
+        } else {
+            softwareFallback(srcRect, localTiny, localOut, w, h)
+        }
+    }
+
+    private fun pixelCopy(srcRect: Rect, tinyBmp: Bitmap, outBmp: Bitmap, w: Int, h: Int) {
+        val win = window ?: return
+        val full = try {
+            Bitmap.createBitmap(srcRect.width(), srcRect.height(), Bitmap.Config.ARGB_8888)
+        } catch (e: Exception) { return }
+        try {
+            PixelCopy.request(win, srcRect, full, { result ->
+                if (result == PixelCopy.SUCCESS) {
+                    blurPipeline(full, tinyBmp, outBmp, w, h)
+                } else {
+                    full.recycle()
+                    softwareFallback(srcRect, tinyBmp, outBmp, w, h)
+                }
+            }, handler)
+        } catch (e: Exception) {
+            full.recycle()
+            softwareFallback(srcRect, tinyBmp, outBmp, w, h)
+        }
+    }
+
+    private fun softwareFallback(srcRect: Rect, tinyBmp: Bitmap, outBmp: Bitmap, w: Int, h: Int) {
+        val host = hostView ?: return
+        val full = try {
+            Bitmap.createBitmap(srcRect.width(), srcRect.height(), Bitmap.Config.ARGB_8888)
+        } catch (e: Exception) { return }
+        val cs = Canvas(full)
         cs.drawColor(0x00000000)
-        cs.translate(-dx, -dy)
-        cs.clipRect(0f, 0f, w.toFloat(), h.toFloat())
+        cs.translate(-srcRect.left.toFloat(), -srcRect.top.toFloat())
         try { host.draw(cs) } catch (e: Exception) {}
+        blurPipeline(full, tinyBmp, outBmp, w, h)
+    }
 
-        rTiny.set(0f, 0f, tw.toFloat(), th.toFloat())
+    private fun blurPipeline(full: Bitmap, tinyBmp: Bitmap, outBmp: Bitmap, w: Int, h: Int) {
+        rTiny.set(0f, 0f, tinyBmp.width.toFloat(), tinyBmp.height.toFloat())
         rect.set(0f, 0f, w.toFloat(), h.toFloat())
-        var cur: Bitmap = localCap
+        var cur: Bitmap = full
         for (i in 0 until 2) {
-            val ct = Canvas(localTiny)
+            val ct = Canvas(tinyBmp)
             ct.drawColor(0x00000000)
             ct.drawBitmap(cur, null, rTiny, paint)
-            val co = Canvas(localOut)
+            val co = Canvas(outBmp)
             co.drawColor(0x00000000)
-            co.drawBitmap(localTiny, null, rect, paint)
-            cur = localOut
+            co.drawBitmap(tinyBmp, null, rect, paint)
+            cur = outBmp
         }
-
-        blurred = localOut
+        blurred = outBmp
+        if (cur !== full) full.recycle()
         invalidateSelf()
     }
 
