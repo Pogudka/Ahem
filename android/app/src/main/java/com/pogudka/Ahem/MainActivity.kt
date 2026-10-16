@@ -201,7 +201,7 @@ class MainActivity : Activity() {
 
         val glass = GlassDrawable()
         glass.setRadius(dp(28).toFloat())
-        glass.setTint(P.navGlass)
+        glass.setGlassTint(P.navGlass)
         glass.setBorder(P.border, dp(1).toFloat())
         glassNav = glass
 
