@@ -1,6 +1,10 @@
 package com.pogudka.Ahem
 
 import android.widget.Toast
+import com.google.firebase.auth.FirebaseAuthInvalidCredentialsException
+import com.google.firebase.auth.FirebaseAuthUserCollisionException
+import com.google.firebase.auth.FirebaseAuthWeakPasswordException
+import com.google.firebase.auth.FirebaseNetworkException
 import com.google.firebase.database.DataSnapshot
 import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.ValueEventListener
@@ -11,6 +15,49 @@ internal data class Acc(
     val email: String,
     val pass: String
 )
+
+internal fun isAuthNetworkError(e: Exception?): Boolean {
+    if (e == null) return false
+    if (e is FirebaseNetworkException) return true
+    val low = (e.message ?: "").lowercase()
+    return low.contains("json conversion failed") ||
+        low.contains("<!doctype") ||
+        low.contains("403") ||
+        low.contains("forbidden") ||
+        low.contains("internal error has occurred") ||
+        low.contains("network") ||
+        low.contains("timeout") ||
+        low.contains("unavailable") ||
+        low.contains("connection")
+}
+
+internal fun authErrorText(e: Exception?): String {
+    if (e == null) return "Неизвестная ошибка входа"
+    val msg = e.message ?: ""
+    val low = msg.lowercase()
+    if (low.contains("json conversion failed") || low.contains("<!doctype") || low.contains("403") || low.contains("forbidden") || low.contains("internal error has occurred")) {
+        return "Серверы Google недоступны из этой сети (блокировка/403). Включи VPN или смени сеть и повтори."
+    }
+    if (e is FirebaseNetworkException) {
+        return "Нет связи с сервером. Проверь интернет/VPN и повтори."
+    }
+    if (e is FirebaseAuthWeakPasswordException) {
+        return "Пароль слишком простой (минимум 6 символов)."
+    }
+    if (e is FirebaseAuthInvalidCredentialsException) {
+        return "Неверный email или пароль."
+    }
+    if (e is FirebaseAuthUserCollisionException) {
+        return "Этот email уже зарегистрирован."
+    }
+    if (low.contains("too many requests") || low.contains("quota") || low.contains("rate limit")) {
+        return "Слишком много попыток. Подожди минуту и повтори."
+    }
+    if (low.contains("network") || low.contains("timeout") || low.contains("unavailable") || low.contains("connection")) {
+        return "Проблема с сетью до Google. Включи VPN или смени сеть."
+    }
+    return "Ошибка входа: ${e.javaClass.simpleName}"
+}
 
 internal fun saveAccount(act: MainActivity, uid: String, nick: String, email: String, pass: String) {
     if (uid.isEmpty()) return
@@ -74,7 +121,6 @@ internal fun followUser(act: MainActivity, targetUid: String, targetNick: String
     fr.child("ts").setValue(now)
     act.myFollowingIds.add(targetUid)
     Toast.makeText(act, "Подписаны на $targetNick", Toast.LENGTH_SHORT).show()
-    refreshProfile(act)
 }
 
 internal fun followByNick(act: MainActivity, nickRaw: String) {
@@ -98,6 +144,7 @@ internal fun followByNick(act: MainActivity, nickRaw: String) {
                 Toast.makeText(act, "Пользователь не найден", Toast.LENGTH_SHORT).show()
             } else {
                 followUser(act, foundUid, n)
+                loadFeed(act)
             }
         }
         override fun onCancelled(error: DatabaseError) {}
