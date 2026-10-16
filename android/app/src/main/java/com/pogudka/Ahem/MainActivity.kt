@@ -5,6 +5,7 @@ import android.animation.ObjectAnimator
 import android.app.Activity
 import android.graphics.Bitmap
 import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -179,13 +180,11 @@ class MainActivity : Activity() {
         }
         database = dbInstance.reference
 
-        val root = LinearLayout(this)
-        root.orientation = LinearLayout.VERTICAL
+        val root = FrameLayout(this)
         root.setBackgroundColor(P.bg)
 
         val content = FrameLayout(this)
-        content.layoutParams = lp(-1, 0, 0)
-        wt(content, 1f)
+        content.layoutParams = FrameLayout.LayoutParams(-1, -1)
 
         val feedTab = buildFeed(this)
         val videoTab = buildVideo(this)
@@ -195,17 +194,21 @@ class MainActivity : Activity() {
         for (t in tabs) content.addView(t, FrameLayout.LayoutParams(-1, -1))
 
         val navWrap = FrameLayout(this)
-        navWrap.layoutParams = lp(-1, -2, 0)
+        val nwp = FrameLayout.LayoutParams(-1, -2)
+        nwp.gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+        nwp.setMargins(dp(16), 0, dp(16), dp(12))
+        navWrap.layoutParams = nwp
 
         val nav = LinearLayout(this)
         nav.orientation = LinearLayout.HORIZONTAL
         nav.gravity = Gravity.CENTER_VERTICAL
-        nav.background = surf(this, 26, filled = true)
+        val glass = GradientDrawable()
+        glass.setColor(P.navGlass)
+        glass.cornerRadius = dp(28).toFloat()
+        glass.setStroke(dp(1), P.border)
+        nav.background = glass
         nav.setPadding(dp(10), dp(8), dp(10), dp(8))
-        val nlp = FrameLayout.LayoutParams(-1, -2)
-        nlp.gravity = Gravity.CENTER_HORIZONTAL
-        nlp.setMargins(dp(16), 0, dp(16), dp(12))
-        nav.layoutParams = nlp
+        nav.layoutParams = FrameLayout.LayoutParams(-1, -2)
 
         val icons = intArrayOf(R.drawable.ic_feed, R.drawable.ic_video, R.drawable.ic_chat, R.drawable.ic_profile)
         navIcons = Array(4) { i ->
@@ -222,6 +225,13 @@ class MainActivity : Activity() {
         root.addView(content)
         root.addView(navWrap)
         setContentView(root)
+
+        val navSpace = dp(96)
+        feedBox.setPadding(0, 0, 0, navSpace)
+        profilePostsGrid.setPadding(0, 0, 0, navSpace)
+        convBox.setPadding(0, 0, 0, navSpace)
+        chatListRows.setPadding(0, 0, 0, navSpace)
+
         showTab(0)
 
         connectedListener = object : ValueEventListener {
