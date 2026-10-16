@@ -22,8 +22,7 @@ internal class GlassDrawable : Drawable() {
     private var liveBlur = true
     private var blurred: Bitmap? = null
     private var src: Bitmap? = null
-    private var small: Bitmap? = null
-    private var quarter: Bitmap? = null
+    private var tiny: Bitmap? = null
 
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val tintPaint = Paint()
@@ -31,11 +30,10 @@ internal class GlassDrawable : Drawable() {
     private val innerPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val hiPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val rect = RectF()
-    private val rSmall = RectF()
-    private val rQuarter = RectF()
+    private val rTiny = RectF()
     private val path = Path()
     private var radius = 0f
-    private var blurLevel = 3
+    private var blurRadius = 18f
     private val handler = Handler(Looper.getMainLooper())
     private var pending = false
     private val locSelf = IntArray(2)
@@ -57,7 +55,7 @@ internal class GlassDrawable : Drawable() {
     }
 
     fun setRadius(r: Float) { radius = r }
-    fun setBlurLevel(level: Int) { blurLevel = level.coerceIn(1, 5) }
+    fun setBlurRadius(px: Float) { blurRadius = px.coerceIn(4f, 30f) }
     fun setGlassTint(color: Int) { tintPaint.color = color }
 
     fun setBorder(color: Int, widthPx: Float) {
@@ -83,26 +81,20 @@ internal class GlassDrawable : Drawable() {
         val h = ex.height
         if (w <= 0 || h <= 0) return
 
-        val hw = (w / 2).coerceAtLeast(1)
-        val hh = (h / 2).coerceAtLeast(1)
-        val qw = (w / 4).coerceAtLeast(1)
-        val qh = (h / 4).coerceAtLeast(1)
+        // сильный блюр: даунсэмпл в blurRadius раз + апскейл с фильтром
+        val div = blurRadius
+        val tw = (w / div).toInt().coerceAtLeast(2)
+        val th = (h / div).toInt().coerceAtLeast(2)
 
-        // локальные non-null буферы: smart cast на поля класса не требуется
         val localSrc: Bitmap
         val es = src
         if (es != null && es.width == w && es.height == h) localSrc = es
         else { localSrc = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888); src = localSrc }
 
-        val localSmall: Bitmap
-        val em = small
-        if (em != null && em.width == hw && em.height == hh) localSmall = em
-        else { localSmall = Bitmap.createBitmap(hw, hh, Bitmap.Config.ARGB_8888); small = localSmall }
-
-        val localQuarter: Bitmap
-        val eq = quarter
-        if (eq != null && eq.width == qw && eq.height == qh) localQuarter = eq
-        else { localQuarter = Bitmap.createBitmap(qw, qh, Bitmap.Config.ARGB_8888); quarter = localQuarter }
+        val localTiny: Bitmap
+        val et = tiny
+        if (et != null && et.width == tw && et.height == th) localTiny = et
+        else { localTiny = Bitmap.createBitmap(tw, th, Bitmap.Config.ARGB_8888); tiny = localTiny }
 
         ex.getLocationInWindow(locSelf)
         root.getLocationInWindow(locRoot)
@@ -117,23 +109,17 @@ internal class GlassDrawable : Drawable() {
         try { root.draw(cs) } catch (e: Exception) {}
         ex.visibility = oldVis
 
-        rSmall.set(0f, 0f, hw.toFloat(), hh.toFloat())
-        rQuarter.set(0f, 0f, qw.toFloat(), qh.toFloat())
+        rTiny.set(0f, 0f, tw.toFloat(), th.toFloat())
+        val ct = Canvas(localTiny)
+        ct.drawColor(0x00000000)
+        ct.drawBitmap(localSrc, null, rTiny, paint)
 
-        val cd1 = Canvas(localSmall)
-        cd1.drawColor(0x00000000)
-        cd1.drawBitmap(localSrc, null, rSmall, paint)
-        var cur: Bitmap = localSmall
-        for (i in 0 until blurLevel) {
-            val cq = Canvas(localQuarter)
-            cq.drawColor(0x00000000)
-            cq.drawBitmap(cur, null, rQuarter, paint)
-            val cu = Canvas(localSmall)
-            cu.drawColor(0x00000000)
-            cu.drawBitmap(localQuarter, null, rSmall, paint)
-            cur = localSmall
-        }
-        blurred = cur
+        val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        val co = Canvas(out)
+        co.drawColor(0x00000000)
+        rect.set(0f, 0f, w.toFloat(), h.toFloat())
+        co.drawBitmap(localTiny, null, rect, paint)
+        blurred = out
         invalidateSelf()
     }
 
