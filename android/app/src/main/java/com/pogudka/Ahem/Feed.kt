@@ -251,10 +251,9 @@ internal fun buildFeed(act: MainActivity): View {
                     act.currentEmail = email
                     act.viewingUserId = userId
                     saveAccount(act, userId, nick, email, pass)
-                    loadMyFollowing(act) {
-                        act.feedStatus.text = "Зарегистрирован!"
-                        enterFeedMode(act)
-                    }
+                    act.saveSessionPrefs()
+                    enterFeedMode(act)
+                    loadMyFollowing(act) { renderFeed(act) }
                 } else {
                     act.feedStatus.text = "Ошибка: ${task.exception?.message}"
                 }
@@ -286,17 +285,18 @@ internal fun buildFeed(act: MainActivity): View {
                 act.currentUserId = userId
                 act.currentEmail = email
                 act.viewingUserId = userId
-                loadMyFollowing(act) {
-                    act.database.child("users").child(userId).addListenerForSingleValueEvent(object : ValueEventListener {
-                        override fun onDataChange(snapshot: DataSnapshot) {
-                            act.currentNick = snapshot.child("nick").getValue(String::class.java) ?: "Аноним"
-                            act.currentAvatar = snapshot.child("avatar").getValue(String::class.java) ?: ""
-                            saveAccount(act, userId, act.currentNick, email, pass)
-                            enterFeedMode(act)
-                        }
-                        override fun onCancelled(error: DatabaseError) {}
-                    })
-                }
+                enterFeedMode(act)
+                loadMyFollowing(act) { renderFeed(act) }
+                act.database.child("users").child(userId).addListenerForSingleValueEvent(object : ValueEventListener {
+                    override fun onDataChange(snapshot: DataSnapshot) {
+                        act.currentNick = snapshot.child("nick").getValue(String::class.java) ?: "Аноним"
+                        act.currentAvatar = snapshot.child("avatar").getValue(String::class.java) ?: ""
+                        saveAccount(act, userId, act.currentNick, email, pass)
+                        act.saveSessionPrefs()
+                        renderFeed(act)
+                    }
+                    override fun onCancelled(error: DatabaseError) { dbDenied(act, error) }
+                })
             } else {
                 act.feedStatus.text = "Ошибка: ${task.exception?.message}"
             }
@@ -416,42 +416,31 @@ internal fun collapsePtr(act: MainActivity) {
 internal fun enterFeedMode(act: MainActivity) {
     act.authBlock.visibility = View.GONE
     act.feedBlock.visibility = View.VISIBLE
-    migrateStats(act) { loadFeed(act) }
+    loadFeed(act)
+    scheduleMigration(act)
 }
 
 internal fun loadFeed(act: MainActivity, onDone: (() -> Unit)? = null) {
     act.feedGen += 1
     val gen = act.feedGen
-    act.statsMap.clear()
     var postsSnap: DataSnapshot? = null
-    var statsSnap: DataSnapshot? = null
-    var done = false
-    fun finish() {
+    var postsDone = false
+    var statsDone = false
+    fun tryFinish() {
         if (gen != act.feedGen) return
-        if (done) return
-        done = true
-        if (statsSnap != null) for (s in statsSnap!!.children) s.key?.let { act.statsMap[it] = s }
+        if (!postsDone || !statsDone) return
         act.lastPosts.clear()
         if (postsSnap != null) for (c in postsSnap!!.children) act.lastPosts.add(c)
         renderFeed(act)
         onDone?.invoke()
     }
-    act.database.child("posts").addListenerForSingleValueEvent(object : ValueEventListener {
-        override fun onDataChange(snapshot: DataSnapshot) { postsSnap = snapshot; finish() }
-        override fun onCancelled(error: DatabaseError) {
-            postsSnap = null
-            dbDenied(act, error)
-            finish()
-        }
-    })
-    act.database.child("postStats").addListenerForSingleValueEvent(object : ValueEventListener {
-        override fun onDataChange(snapshot: DataSnapshot) { statsSnap = snapshot; finish() }
-        override fun onCancelled(error: DatabaseError) {
-            statsSnap = null
-            dbDenied(act, error)
-            finish()
-        }
-    })
+    readOnce(act.database.child("posts"), act, 3,
+        { s -> postsSnap = s; postsDone = true; tryFinish() },
+        { postsSnap = null; postsDone = true; tryFinish() })
+    readStatsInto(act) {
+        statsDone = true
+        tryFinish()
+    }
 }
 
 internal fun renderFeed(act: MainActivity) {
