@@ -15,6 +15,7 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
 import androidx.core.content.res.ResourcesCompat
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.database.DataSnapshot
@@ -22,6 +23,8 @@ import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.DatabaseReference
 import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.database.ValueEventListener
+
+internal const val DB_URL = ""
 
 class MainActivity : Activity() {
 
@@ -57,6 +60,7 @@ class MainActivity : Activity() {
     internal var isLoggingIn = false
     internal var feedQuery = ""
     internal val lastPosts = ArrayList<DataSnapshot>()
+    internal var netWarned = false
 
     internal lateinit var ptrHeader: FrameLayout
     internal lateinit var ptrSpin: ImageView
@@ -102,6 +106,7 @@ class MainActivity : Activity() {
     internal var viewingUserId = ""
     internal var viewingNick = ""
     internal var currentProfileTargetId = ""
+    internal var lastProfileTarget = ""
     internal var editAvatarView: ImageView? = null
 
     internal val PICK_IMAGES = 1002
@@ -111,8 +116,13 @@ class MainActivity : Activity() {
 
     internal var profileGen = 0
     internal var feedGen = 0
+    internal var migrationScheduled = false
+    internal var migrationRunning = false
+    internal val gridCache = HashMap<String, ArrayList<DataSnapshot>>()
+    internal val gridStatsCache = HashMap<String, Pair<Long, Long>>()
 
     private var authListener: FirebaseAuth.AuthStateListener? = null
+    private var connectedListener: ValueEventListener? = null
     internal val avatarCache = HashMap<String, Bitmap>()
     internal val imageCache = HashMap<String, Bitmap>()
     internal val mediaCache = HashMap<String, String>()
@@ -142,12 +152,31 @@ class MainActivity : Activity() {
         }
     }
 
+    internal fun saveSessionPrefs() {
+        getSharedPreferences("ahem", Context.MODE_PRIVATE).edit()
+            .putString("last_uid", currentUserId)
+            .putString("last_nick", currentNick)
+            .putString("last_email", currentEmail)
+            .apply()
+    }
+
+    internal fun clearSessionPrefs() {
+        getSharedPreferences("ahem", Context.MODE_PRIVATE).edit()
+            .remove("last_uid").remove("last_nick").remove("last_email")
+            .apply()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         applyTheme(this, isDark(this))
 
         auth = FirebaseAuth.getInstance()
-        database = FirebaseDatabase.getInstance().reference
+        val dbInstance = if (DB_URL.isEmpty()) FirebaseDatabase.getInstance() else FirebaseDatabase.getInstance(DB_URL)
+        try {
+            dbInstance.setPersistenceEnabled(true)
+        } catch (e: Exception) {
+        }
+        database = dbInstance.reference
 
         val root = LinearLayout(this)
         root.orientation = LinearLayout.VERTICAL
@@ -194,25 +223,45 @@ class MainActivity : Activity() {
         setContentView(root)
         showTab(0)
 
+        connectedListener = object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                val connected = snapshot.getValue(Boolean::class.java) ?: false
+                if (!connected && !netWarned) {
+                    netWarned = true
+                    Toast.makeText(this@MainActivity, "Нет соединения с сервером Firebase: сеть/VPN", Toast.LENGTH_LONG).show()
+                }
+                if (connected) netWarned = false
+            }
+            override fun onCancelled(error: DatabaseError) {}
+        }
+        database.child(".info/connected").addValueEventListener(connectedListener!!)
+
         authListener = FirebaseAuth.AuthStateListener { firebaseAuth ->
             val user = firebaseAuth.currentUser
             if (user != null && currentUserId.isEmpty()) {
                 currentUserId = user.uid
                 viewingUserId = currentUserId
                 viewingNick = ""
-                loadMyFollowing(this) {
-                    database.child("users").child(currentUserId)
-                        .addListenerForSingleValueEvent(object : ValueEventListener {
-                            override fun onDataChange(snapshot: DataSnapshot) {
-                                currentNick = snapshot.child("nick").getValue(String::class.java) ?: "Аноним"
-                                currentAvatar = snapshot.child("avatar").getValue(String::class.java) ?: ""
-                                currentEmail = snapshot.child("email").getValue(String::class.java) ?: (auth.currentUser?.email ?: "")
-                                if (::feedBlock.isInitialized && feedBlock.visibility == View.GONE) enterFeedMode(this@MainActivity)
-                                if (::profileRoot.isInitialized) refreshProfile(this@MainActivity)
-                            }
-                            override fun onCancelled(error: DatabaseError) {}
-                        })
-                }
+                val prefs = getSharedPreferences("ahem", Context.MODE_PRIVATE)
+                val pn = prefs.getString("last_nick", "") ?: ""
+                val pe = prefs.getString("last_email", "") ?: ""
+                if (pn.isNotEmpty()) currentNick = pn
+                if (pe.isNotEmpty()) currentEmail = pe
+                if (::feedBlock.isInitialized && feedBlock.visibility == View.GONE) enterFeedMode(this)
+                if (::profileRoot.isInitialized) refreshProfile(this)
+                loadMyFollowing(this) { renderFeed(this) }
+                database.child("users").child(currentUserId)
+                    .addListenerForSingleValueEvent(object : ValueEventListener {
+                        override fun onDataChange(snapshot: DataSnapshot) {
+                            currentNick = snapshot.child("nick").getValue(String::class.java) ?: currentNick.ifEmpty { "Аноним" }
+                            currentAvatar = snapshot.child("avatar").getValue(String::class.java) ?: ""
+                            currentEmail = snapshot.child("email").getValue(String::class.java) ?: currentEmail
+                            saveSessionPrefs()
+                            if (::profileRoot.isInitialized) refreshProfile(this@MainActivity)
+                            renderFeed(this@MainActivity)
+                        }
+                        override fun onCancelled(error: DatabaseError) { dbDenied(this@MainActivity, error) }
+                    })
             } else if (user == null && currentUserId.isNotEmpty()) {
                 currentUserId = ""
                 currentNick = ""
@@ -220,11 +269,15 @@ class MainActivity : Activity() {
                 currentAvatar = ""
                 viewingUserId = ""
                 viewingNick = ""
+                lastProfileTarget = ""
                 myFollowingIds.clear()
                 imageCache.clear()
                 avatarCache.clear()
                 mediaCache.clear()
                 viewsTvMap.clear()
+                gridCache.clear()
+                gridStatsCache.clear()
+                clearSessionPrefs()
                 if (::feedBlock.isInitialized) {
                     feedBlock.visibility = View.GONE
                     authBlock.visibility = View.VISIBLE
@@ -238,6 +291,7 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         super.onDestroy()
         authListener?.let { auth.removeAuthStateListener(it) }
+        connectedListener?.let { database.child(".info/connected").removeEventListener(it) }
         ptrAnimator?.cancel()
         convListener?.let { database.child("conversations").child(currentUserId).removeEventListener(it) }
     }
