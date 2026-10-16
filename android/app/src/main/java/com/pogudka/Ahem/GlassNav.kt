@@ -8,10 +8,8 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.PixelFormat
 import android.graphics.RectF
-import android.graphics.RenderEffect
 import android.graphics.Shader
 import android.graphics.drawable.Drawable
-import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.view.View
@@ -23,14 +21,21 @@ internal class GlassDrawable : Drawable() {
     private var excludeView: View? = null
     private var blurred: Bitmap? = null
     private var src: Bitmap? = null
+    private var smallBuf: Bitmap? = null
+    private var bufA: Bitmap? = null
+    private var bufB: Bitmap? = null
+
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val tintPaint = Paint()
     private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val innerPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val hiPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val rect = RectF()
+    private val dstRect = RectF()
     private val path = Path()
     private var radius = 0f
-    private var blurPx = 0f
+    private var blurLevel = 3
+    private var borderColor = 0xFFE2E2E6.toInt()
     private val handler = Handler(Looper.getMainLooper())
     private var pending = false
     private val locSelf = IntArray(2)
@@ -48,13 +53,17 @@ internal class GlassDrawable : Drawable() {
     }
 
     fun setRadius(r: Float) { radius = r }
-    fun setBlurRadius(px: Float) { blurPx = px }
+    fun setBlurLevel(level: Int) { blurLevel = level.coerceIn(1, 6) }
     fun setGlassTint(color: Int) { tintPaint.color = color }
 
     fun setBorder(color: Int, widthPx: Float) {
+        borderColor = color
         borderPaint.color = color
         borderPaint.style = Paint.Style.STROKE
         borderPaint.strokeWidth = widthPx
+        innerPaint.color = 0x33FFFFFF
+        innerPaint.style = Paint.Style.STROKE
+        innerPaint.strokeWidth = widthPx
     }
 
     fun requestRefresh() {
@@ -69,11 +78,30 @@ internal class GlassDrawable : Drawable() {
         val w = ex.width
         val h = ex.height
         if (w <= 0 || h <= 0) return
+
         var s = src
         if (s == null || s.width != w || s.height != h) {
             s = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
             src = s
         }
+        val sw = (w / 2).coerceAtLeast(1)
+        val sh = (h / 2).coerceAtLeast(1)
+        var small = smallBuf
+        if (small == null || small.width != sw || small.height != sh) {
+            small = Bitmap.createBitmap(sw, sh, Bitmap.Config.ARGB_8888)
+            smallBuf = small
+        }
+        var a = bufA
+        if (a == null || a.width != w || a.height != h) {
+            a = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+            bufA = a
+        }
+        var b = bufB
+        if (b == null || b.width != w || b.height != h) {
+            b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+            bufB = b
+        }
+
         ex.getLocationInWindow(locSelf)
         root.getLocationInWindow(locRoot)
         val dx = (locSelf[0] - locRoot[0]).toFloat()
@@ -86,34 +114,21 @@ internal class GlassDrawable : Drawable() {
         try { root.draw(cs) } catch (e: Exception) {}
         ex.visibility = oldVis
 
-        var out = blurred
-        if (out == null || out.width != w || out.height != h) {
-            out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        // итеративный bilinear blur: down->up, несколько проходов = гауссоподобно, без пикселей
+        dstRect.set(0f, 0f, sw.toFloat(), sh.toFloat())
+        val full = RectF(0f, 0f, w.toFloat(), h.toFloat())
+        var cur: Bitmap = s
+        for (i in 0 until blurLevel) {
+            val cd = Canvas(small)
+            cd.drawColor(0x00000000)
+            cd.drawBitmap(cur, null, dstRect, paint)
+            val outBuf = if (i % 2 == 0) a else b
+            val cu = Canvas(outBuf)
+            cu.drawColor(0x00000000)
+            cu.drawBitmap(small, null, full, paint)
+            cur = outBuf
         }
-        val co = Canvas(out)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && blurPx > 0f) {
-            co.setRenderEffect(
-                RenderEffect.createBlurEffect(blurPx, blurPx, Shader.TileMode.CLAMP)
-            )
-            co.drawBitmap(s, 0f, 0f, paint)
-            co.setRenderEffect(null)
-        } else {
-            // пирамида bilinear = приближение гаусса без пикселей
-            var cw = w; var ch = h
-            var cur = s
-            var i = 0
-            while (cw > 2 && ch > 2 && i < 3) {
-                val nw = (cw / 2).coerceAtLeast(1)
-                val nh = (ch / 2).coerceAtLeast(1)
-                val tmp = Bitmap.createBitmap(nw, nh, Bitmap.Config.ARGB_8888)
-                val ct = Canvas(tmp)
-                ct.drawBitmap(cur, null, RectF(0f, 0f, nw.toFloat(), nh.toFloat()), paint)
-                cur = tmp
-                cw = nw; ch = nh; i++
-            }
-            co.drawBitmap(cur, null, RectF(0f, 0f, w.toFloat(), h.toFloat()), paint)
-        }
-        blurred = out
+        blurred = cur
         invalidateSelf()
     }
 
@@ -139,14 +154,10 @@ internal class GlassDrawable : Drawable() {
         hiPaint.shader = null
         canvas.restore()
         canvas.drawPath(path, borderPaint)
-        borderPaint.color = 0x33FFFFFF
-        canvas.drawPath(insetPath(path, 1f), borderPaint)
-        borderPaint.color = P.border
+        canvas.drawPath(insetPath(rect, 1f), innerPaint)
     }
 
-    private fun insetPath(p: Path, d: Float): Path {
-        val r = RectF()
-        p.computeBounds(r, true)
+    private fun insetPath(r: RectF, d: Float): Path {
         val np = Path()
         np.addRoundRect(r.left + d, r.top + d, r.right - d, r.bottom - d, radius, radius, Path.Direction.CCW)
         return np
