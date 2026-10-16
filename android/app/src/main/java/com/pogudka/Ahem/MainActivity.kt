@@ -89,6 +89,8 @@ class MainActivity : Activity() {
     internal var currentChatOtherNick = ""
     internal var convListener: ValueEventListener? = null
     internal var convListener2: ValueEventListener? = null
+    internal var chatSnapMine: DataSnapshot? = null
+    internal var chatSnapPeer: DataSnapshot? = null
 
     internal lateinit var profileRoot: LinearLayout
     internal lateinit var profileAvatar: ImageView
@@ -164,7 +166,11 @@ class MainActivity : Activity() {
 
     private fun hookGlassScroll() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
-        val refresh = { _: View?, _: Int, _: Int, _: Int, _: Int -> glassNav?.requestRefresh() }
+        val refresh = object : View.OnScrollChangeListener {
+            override fun onScrollChange(v: View?, sx: Int, sy: Int, ox: Int, oy: Int) {
+                glassNav?.requestRefresh()
+            }
+        }
         if (::feedScroll.isInitialized) feedScroll.setOnScrollChangeListener(refresh)
         if (::profileScroll.isInitialized) profileScroll.setOnScrollChangeListener(refresh)
         if (::convScroll.isInitialized) convScroll.setOnScrollChangeListener(refresh)
