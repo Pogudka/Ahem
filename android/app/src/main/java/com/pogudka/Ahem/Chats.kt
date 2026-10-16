@@ -43,16 +43,17 @@ private fun msgNick(m: DataSnapshot): String {
     return ""
 }
 
-// ориентация: senderUid однозначен в обоих ящиках; поле mine неоднозначно между ящиками,
-// поэтому для чужого ящика инвертируем; древние без всего -> фолбэк по ящику
+// ориентация строго по отправителю; без инверсии по ящику (она ломала старые записи)
 private fun msgMine(m: DataSnapshot, myUid: String, boxIsMine: Boolean): Boolean {
     val su = m.child("senderUid").getValue(String::class.java)
         ?: m.child("from").getValue(String::class.java)
         ?: m.child("uid").getValue(String::class.java)
+        ?: m.child("sender").getValue(String::class.java)
+        ?: m.child("author").getValue(String::class.java)
         ?: ""
     if (su.isNotEmpty()) return su == myUid
     val mine = m.child("mine").getValue(Boolean::class.java)
-    if (mine != null) return if (boxIsMine) mine else !mine
+    if (mine != null) return mine
     return boxIsMine
 }
 
@@ -145,7 +146,7 @@ internal fun buildChats(act: MainActivity): View {
     val ibg = GlassDrawable()
     ibg.setLiveBlur(true)
     ibg.setRadius(act.dp(26).toFloat())
-    ibg.setBlurLevel(2)
+    ibg.setBlurRadius(act.dp(18).toFloat())
     ibg.setGlassTint(P.navGlass)
     ibg.setBorder(P.border, act.dp(1).toFloat())
     inputBar.background = ibg
@@ -268,10 +269,12 @@ internal fun renderConversation(act: MainActivity, items: List<Pair<DataSnapshot
     act.convBox.removeAllViews()
     val df = SimpleDateFormat("HH:mm", Locale.getDefault())
     val maxW = (act.resources.displayMetrics.widthPixels * 0.78).toInt()
+    var drawn = 0
     for ((m, mine) in items) {
         val text = msgText(m)
         if (text.isEmpty()) continue
         val ts = msgTs(m)
+        drawn++
         val row = LinearLayout(act)
         row.orientation = LinearLayout.HORIZONTAL
         row.gravity = Gravity.CENTER_VERTICAL
@@ -316,6 +319,12 @@ internal fun renderConversation(act: MainActivity, items: List<Pair<DataSnapshot
             row.addView(sp)
         }
         act.convBox.addView(row)
+    }
+    if (drawn == 0 && (act.chatSnapMine != null || act.chatSnapPeer != null)) {
+        val empty = tv(act, "Нет сообщений", 14f, act.fMed, P.textSec)
+        empty.gravity = Gravity.CENTER
+        empty.setPadding(0, act.dp(40), 0, act.dp(40))
+        act.convBox.addView(empty)
     }
     act.convScroll.post { act.convScroll.fullScroll(View.FOCUS_DOWN) }
 }
