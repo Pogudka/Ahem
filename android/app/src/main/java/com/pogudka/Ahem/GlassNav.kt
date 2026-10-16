@@ -1,4 +1,4 @@
-лpackage com.pogudka.Ahem
+package com.pogudka.Ahem
 
 import android.graphics.Bitmap
 import android.graphics.Canvas
