@@ -15,7 +15,6 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-// детерминированный ключ пары: оба участника вычисляют одинаковый
 internal fun chatPairKey(a: String, b: String): String =
     if (a <= b) "${a}_$b" else "${b}_$a"
 
@@ -61,8 +60,7 @@ private fun msgNick(m: DataSnapshot): String = try {
     r
 } catch (e: Exception) { "" }
 
-// senderUid однозначен -> по нему; иначе ник; иначе фолбэк по источнику (inbox = входящие)
-private fun msgMine(m: DataSnapshot, myUid: String, myNick: String, inboxFallback: Boolean): Boolean {
+private fun msgMine(m: DataSnapshot, myUid: String, myNick: String, def: Boolean): Boolean {
     return try {
         val uidKeys = arrayOf("senderUid", "from", "uid", "sender", "author", "userId", "owner", "by")
         var res: Boolean? = null
@@ -74,11 +72,15 @@ private fun msgMine(m: DataSnapshot, myUid: String, myNick: String, inboxFallbac
             val n = msgNick(m)
             if (n.isNotEmpty()) res = (n == myNick)
         }
-        res ?: inboxFallback
-    } catch (e: Exception) { inboxFallback }
+        if (res == null) {
+            val v = m.child("mine").getValue(Boolean::class.java)
+            if (v != null) res = v
+        }
+        res ?: def
+    } catch (e: Exception) { def }
 }
 
-private fun peersKey() = "chat_peers_v5"
+private fun peersKey() = "chat_peers_v6"
 
 private fun loadPeers(act: MainActivity): LinkedHashMap<String, String> {
     val raw = act.getSharedPreferences("ahem", Context.MODE_PRIVATE).getString(peersKey(), "") ?: ""
@@ -188,9 +190,8 @@ internal fun buildChats(act: MainActivity): View {
     inputBar.orientation = LinearLayout.HORIZONTAL
     inputBar.gravity = Gravity.CENTER_VERTICAL
     val ibg = GlassDrawable()
-    ibg.setLiveBlur(true)
     ibg.setRadius(act.dp(26).toFloat())
-    ibg.setBlurRadius(act.dp(24).toFloat())
+    ibg.setBlurRadius(act.dp(40).toFloat())
     ibg.setGlassTint(P.navGlass)
     ibg.setBorder(P.border, act.dp(1).toFloat())
     inputBar.background = ibg
@@ -230,13 +231,16 @@ internal fun closeConversation(act: MainActivity) {
     try {
         val me = act.currentUserId
         val peer = act.currentChat
-        act.convListener?.let { act.database.child("chats").child(chatPairKey(me, peer)).removeEventListener(it) }
-        act.convListener2?.let { act.database.child("conversations").child(me).removeEventListener(it) }
+        act.convListener?.let { act.database.child("conversations").child(me).child(peer).removeEventListener(it) }
+        act.convListener2?.let { act.database.child("chats").child(chatPairKey(me, peer)).removeEventListener(it) }
+        act.convListener3?.let { act.database.child("conversations").child(peer).removeEventListener(it) }
     } catch (e: Exception) {}
     act.convListener = null
     act.convListener2 = null
+    act.convListener3 = null
+    act.chatSnapMine = null
     act.chatSnapChats = null
-    act.chatSnapInbox = null
+    act.chatSnapForeign = null
     act.currentChat = ""
     act.currentChatOtherUid = ""
     act.currentChatOtherNick = ""
@@ -256,57 +260,61 @@ internal fun openChat(act: MainActivity, peerUid: String, peerNick: String) {
     act.convRoot.visibility = View.VISIBLE
     act.setNavVisible(false)
     act.convBox.removeAllViews()
+    act.chatSnapMine = null
     act.chatSnapChats = null
-    act.chatSnapInbox = null
+    act.chatSnapForeign = null
     savePeer(act, peerUid, peerNick)
 
     try {
         val me = act.currentUserId
-        act.convListener?.let { act.database.child("chats").child(chatPairKey(me, peerUid)).removeEventListener(it) }
-        act.convListener2?.let { act.database.child("conversations").child(me).removeEventListener(it) }
+        act.convListener?.let { act.database.child("conversations").child(me).child(peerUid).removeEventListener(it) }
+        act.convListener2?.let { act.database.child("chats").child(chatPairKey(me, peerUid)).removeEventListener(it) }
+        act.convListener3?.let { act.database.child("conversations").child(peerUid).removeEventListener(it) }
     } catch (e: Exception) {}
 
     val me = act.currentUserId
-    // 1) двусторонний узел пары — читают оба по правилам chats/$chatId
+    // 1) свой подузел диалога (перекрёстная модель: там и мои, и его) — читаю я
+    val refMine = act.database.child("conversations").child(me).child(peerUid)
+    // 2) двусторонний узел пары — читают оба
     val refChats = act.database.child("chats").child(chatPairKey(me, peerUid))
-    // 2) свой inbox — читаю только я; там входящие + мои дубли
-    val refInbox = act.database.child("conversations").child(me)
+    // 3) тихая попытка чужого плоского узла (по правилам чаще откажет — игнорим молча)
+    val refForeign = act.database.child("conversations").child(peerUid)
 
     val l1 = object : ValueEventListener {
-        override fun onDataChange(s: DataSnapshot) { act.chatSnapChats = s; renderMergedChat(act, peerUid) }
-        override fun onCancelled(error: DatabaseError) { dbDenied(act, error) }
+        override fun onDataChange(s: DataSnapshot) { act.chatSnapMine = s; renderMergedChat(act) }
+        override fun onCancelled(error: DatabaseError) {}
     }
     val l2 = object : ValueEventListener {
-        override fun onDataChange(s: DataSnapshot) { act.chatSnapInbox = s; renderMergedChat(act, peerUid) }
-        override fun onCancelled(error: DatabaseError) { dbDenied(act, error) }
+        override fun onDataChange(s: DataSnapshot) { act.chatSnapChats = s; renderMergedChat(act) }
+        override fun onCancelled(error: DatabaseError) {}
+    }
+    val l3 = object : ValueEventListener {
+        override fun onDataChange(s: DataSnapshot) { act.chatSnapForeign = s; renderMergedChat(act) }
+        override fun onCancelled(error: DatabaseError) {}
     }
     act.convListener = l1
     act.convListener2 = l2
-    refChats.addValueEventListener(l1)
-    refInbox.addValueEventListener(l2)
+    act.convListener3 = l3
+    refMine.addValueEventListener(l1)
+    refChats.addValueEventListener(l2)
+    refForeign.addValueEventListener(l3)
 }
 
-private fun renderMergedChat(act: MainActivity, peerUid: String) {
+private fun renderMergedChat(act: MainActivity) {
     val items = ArrayList<Pair<DataSnapshot, Boolean>>()
     val seen = HashSet<String>()
-    // chats/<pair>: senderUid рулит, фолбэк = чужое (не знаем чьё без поля)
-    act.chatSnapChats?.let { s ->
+    fun add(s: DataSnapshot?, def: Boolean) {
+        if (s == null) return
         for (c in s.children) {
             val key = msgTs(c).toString() + "|" + msgText(c)
             if (key in seen) continue
             seen.add(key)
-            items.add(Pair(c, msgMine(c, act.currentUserId, act.currentNick, false)))
+            items.add(Pair(c, msgMine(c, act.currentUserId, act.currentNick, def)))
         }
     }
-    // conversations/<me>: берём ТОЛЬКО подузлы peerUid (иначе примешаем других), фолбэк = моё (я туда дублирую свои)
-    act.chatSnapInbox?.child(peerUid)?.let { s ->
-        for (c in s.children) {
-            val key = msgTs(c).toString() + "|" + msgText(c)
-            if (key in seen) continue
-            seen.add(key)
-            items.add(Pair(c, msgMine(c, act.currentUserId, act.currentNick, true)))
-        }
-    }
+    add(act.chatSnapMine, false)     // senderUid рулит; без поля — чужое (входящие в мой inbox)
+    add(act.chatSnapChats, false)
+    add(act.chatSnapForeign, false)
     items.sortBy { msgTs(it.first) }
     renderConversation(act, items)
 }
@@ -373,7 +381,7 @@ internal fun renderConversation(act: MainActivity, items: List<Pair<DataSnapshot
         }
         act.convBox.addView(row)
     }
-    if (drawn == 0 && act.chatSnapChats != null && act.chatSnapInbox != null) {
+    if (drawn == 0) {
         val empty = tv(act, "Нет сообщений", 14f, act.fMed, P.textSec)
         empty.gravity = Gravity.CENTER
         empty.setPadding(0, act.dp(20), 0, act.dp(20))
@@ -402,18 +410,18 @@ internal fun sendMessage(act: MainActivity) {
     payload["from"] = me
     payload["nick"] = act.currentNick
 
-    // 1) двусторонний узел пары (основной, читают оба)
-    val rc = act.database.child("chats").child(chatPairKey(me, peer))
-    val kc = rc.push().key
-    if (kc != null) { val m = HashMap(payload); m["mine"] = true; rc.child(kc).setValue(m) }
-    // 2) свой inbox (чтобы у себя отобразилось и в списке)
+    // 1) свой подузел диалога
     val ri = act.database.child("conversations").child(me).child(peer)
     val ki = ri.push().key
     if (ki != null) { val m = HashMap(payload); m["mine"] = true; ri.child(ki).setValue(m) }
-    // 3) inbox собеседника (для старой сборки, читает свой conversations/<self>)
+    // 2) inbox собеседника (write разрешён куда угодно) — чтобы он увидел без chats
     val rp = act.database.child("conversations").child(peer).child(me)
     val kp = rp.push().key
     if (kp != null) { val m = HashMap(payload); m["mine"] = false; rp.child(kp).setValue(m) }
+    // 3) двусторонний узел пары
+    val rc = act.database.child("chats").child(chatPairKey(me, peer))
+    val kc = rc.push().key
+    if (kc != null) { val m = HashMap(payload); m["mine"] = true; rc.child(kc).setValue(m) }
 
     savePeer(act, peer, act.currentChatOtherNick)
     act.msgField.setText("")
@@ -436,7 +444,6 @@ internal fun loadConversations(act: MainActivity) {
                     avatarMap[uid] = u.child("avatar").getValue(String::class.java) ?: ""
                 }
             } catch (e: Exception) {}
-            // перечень = дети своего inbox (легально) UNION локальный реестр
             act.database.child("conversations").child(act.currentUserId).addListenerForSingleValueEvent(object : ValueEventListener {
                 override fun onDataChange(s: DataSnapshot) {
                     val peers = loadPeers(act)
@@ -475,7 +482,6 @@ private fun renderPeerRows(
         return
     }
     act.chatStatus.text = ""
-    // сортировка по последнему ts из inbox
     val lastTs = HashMap<String, Long>()
     inboxSnap?.let { s ->
         for (c in s.children) {
@@ -514,7 +520,6 @@ private fun renderPeerRows(
         val prev = tv(act, "", 13f, act.fReg, P.textSec)
         box.addView(prev)
         row.addView(box)
-        // превью из уже загруженного inbox-снимка (без доп. запросов)
         var lastText = ""
         var lt = 0L
         inboxSnap?.child(uid)?.let { c ->
