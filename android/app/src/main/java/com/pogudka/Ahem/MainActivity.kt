@@ -5,7 +5,6 @@ import android.animation.ObjectAnimator
 import android.app.Activity
 import android.graphics.Bitmap
 import android.graphics.Typeface
-import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -89,8 +88,10 @@ class MainActivity : Activity() {
     internal var currentChatOtherNick = ""
     internal var convListener: ValueEventListener? = null
     internal var convListener2: ValueEventListener? = null
+    internal var convListener3: ValueEventListener? = null
+    internal var chatSnapMine: DataSnapshot? = null
     internal var chatSnapChats: DataSnapshot? = null
-    internal var chatSnapInbox: DataSnapshot? = null
+    internal var chatSnapForeign: DataSnapshot? = null
 
     internal lateinit var profileRoot: LinearLayout
     internal lateinit var profileAvatar: ImageView
@@ -161,19 +162,6 @@ class MainActivity : Activity() {
     internal fun setNavVisible(v: Boolean) {
         if (!::navWrap.isInitialized) return
         navWrap.visibility = if (v) View.VISIBLE else View.GONE
-        glassNav?.requestRefresh()
-    }
-
-    private fun hookGlassScroll() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
-        val refresh = object : View.OnScrollChangeListener {
-            override fun onScrollChange(v: View?, sx: Int, sy: Int, ox: Int, oy: Int) {
-                glassNav?.requestRefresh()
-            }
-        }
-        if (::feedScroll.isInitialized) feedScroll.setOnScrollChangeListener(refresh)
-        if (::profileScroll.isInitialized) profileScroll.setOnScrollChangeListener(refresh)
-        if (::convScroll.isInitialized) convScroll.setOnScrollChangeListener(refresh)
     }
 
     internal fun saveSessionPrefs() {
@@ -224,9 +212,8 @@ class MainActivity : Activity() {
         navWrap.layoutParams = nwp
 
         val glass = GlassDrawable()
-        glass.setLiveBlur(true)
         glass.setRadius(dp(28).toFloat())
-        glass.setBlurRadius(dp(30).toFloat())
+        glass.setBlurRadius(dp(40).toFloat())
         glass.setGlassTint(P.navGlass)
         glass.setBorder(P.border, dp(1).toFloat())
         glassNav = glass
@@ -261,7 +248,6 @@ class MainActivity : Activity() {
         chatListRows.setPadding(0, 0, 0, navSpace)
 
         glass.attach(window, contentFrame, navWrap)
-        hookGlassScroll()
 
         showTab(0)
 
@@ -288,7 +274,6 @@ class MainActivity : Activity() {
                             saveSessionPrefs()
                             if (::profileRoot.isInitialized) refreshProfile(this@MainActivity)
                             renderFeed(this@MainActivity)
-                            glassNav?.requestRefresh()
                         }
                         override fun onCancelled(error: DatabaseError) { dbDenied(this@MainActivity, error) }
                     })
@@ -325,8 +310,9 @@ class MainActivity : Activity() {
         try {
             val me = currentUserId
             val peer = currentChat
-            convListener?.let { database.child("chats").child(chatPairKey(me, peer)).removeEventListener(it) }
-            convListener2?.let { database.child("conversations").child(me).removeEventListener(it) }
+            convListener?.let { database.child("conversations").child(me).child(peer).removeEventListener(it) }
+            convListener2?.let { database.child("chats").child(chatPairKey(me, peer)).removeEventListener(it) }
+            convListener3?.let { database.child("conversations").child(peer).removeEventListener(it) }
         } catch (e: Exception) {}
     }
 
@@ -334,7 +320,6 @@ class MainActivity : Activity() {
         for (idx in tabs.indices) tabs[idx].visibility = if (idx == i) View.VISIBLE else View.GONE
         for (idx in 0 until 4) navIcons[idx].setColorFilter(if (idx == i) P.accent else P.navInactive)
         setNavVisible(true)
-        uiHandler.postDelayed({ glassNav?.requestRefresh() }, 300)
         if (i == 3) {
             if (!keep) {
                 viewingUserId = currentUserId
