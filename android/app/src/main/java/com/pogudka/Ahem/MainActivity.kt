@@ -89,9 +89,11 @@ class MainActivity : Activity() {
     internal var convListener: ValueEventListener? = null
     internal var convListener2: ValueEventListener? = null
     internal var convListener3: ValueEventListener? = null
+    internal var convListener4: ValueEventListener? = null
     internal var chatSnapMine: DataSnapshot? = null
+    internal var chatSnapPeerInbox: DataSnapshot? = null
     internal var chatSnapChats: DataSnapshot? = null
-    internal var chatSnapForeign: DataSnapshot? = null
+    internal var chatSnapFlatForeign: DataSnapshot? = null
 
     internal lateinit var profileRoot: LinearLayout
     internal lateinit var profileAvatar: ImageView
@@ -311,8 +313,9 @@ class MainActivity : Activity() {
             val me = currentUserId
             val peer = currentChat
             convListener?.let { database.child("conversations").child(me).child(peer).removeEventListener(it) }
-            convListener2?.let { database.child("chats").child(chatPairKey(me, peer)).removeEventListener(it) }
+            convListener2?.let { database.child("conversations").child(peer).child(me).removeEventListener(it) }
             convListener3?.let { database.child("conversations").child(peer).removeEventListener(it) }
+            convListener4?.let { database.child("chats").child(chatPairKey(me, peer)).removeEventListener(it) }
         } catch (e: Exception) {}
     }
 
