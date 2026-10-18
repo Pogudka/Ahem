@@ -34,7 +34,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.graphicsLayer
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
@@ -126,7 +126,6 @@ internal fun incViews(act: MainActivity, postId: String) {
 internal fun FeedScreen(act: MainActivity) {
     val authed by act.authScreen
     val query by act.feedQuery
-    val ver by act.statsVer
     Column(Modifier.fillMaxSize().background(ic(P.bg))) {
         if (authed) {
             Row(Modifier.fillMaxWidth().padding(18.dp, 14.dp, 18.dp, 10.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -259,7 +258,6 @@ internal fun PostCard(act: MainActivity, post: DataSnapshot) {
     val authorNick = post.child("authorNick").getValue(String::class.java) ?: "?"
     val text = post.child("text").getValue(String::class.java) ?: ""
     val ts = getTs(post)
-    val ver by act.statsVer
     val stats = act.statsMap[postId]
     val likeCount = (stats?.child("likes")?.value as? Number)?.toLong() ?: 0L
     val viewCount = (stats?.child("views")?.value as? Number)?.toLong() ?: 0L
@@ -335,7 +333,7 @@ private fun GridImages(act: MainActivity, images: List<String>, imgW: Int) {
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 for (c in 0 until 2) {
                     val idx = i + c
-                    if (idx < images.size) GridCell(act, images[idx], cell, cellDp, images, idx)
+                    if (idx < images.size) GridCell(act, images[idx], cell, cellDp, images, idx, Modifier.weight(1f))
                     else Spacer(Modifier.weight(1f).height(cellDp.dp))
                 }
             }
@@ -345,12 +343,12 @@ private fun GridImages(act: MainActivity, images: List<String>, imgW: Int) {
 }
 
 @Composable
-private fun GridCell(act: MainActivity, b64: String, px: Int, cellDp: Float, all: List<String>, idx: Int) {
+private fun GridCell(act: MainActivity, b64: String, px: Int, cellDp: Float, all: List<String>, idx: Int, modifier: Modifier = Modifier) {
     var bmp by remember(b64, px) { mutableStateOf(decodeScaled(b64, px)) }
     if (bmp == null) LaunchedEffect(b64, px) { bmp = decodeScaled(b64, px) }
     val shown = bmp
     Box(
-        Modifier.weight(1f).height(cellDp.dp).clip(RoundedCornerShape(12.dp)).background(ic(P.surface))
+        modifier.height(cellDp.dp).clip(RoundedCornerShape(12.dp)).background(ic(P.surface))
             .clickable { openViewer(act, all, idx) }
     ) {
         if (shown != null) Image(bitmap = shown.asImageBitmap(), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
@@ -366,7 +364,6 @@ internal fun openViewer(act: MainActivity, images: List<String>, start: Int) {
 
 @Composable
 internal fun PostDetailDialog(act: MainActivity, postId: String) {
-    val ver by act.statsVer
     val post = act.postsRaw.toList().firstOrNull { it.key == postId }
     LaunchedEffect(postId) { incViews(act, postId) }
     Dialog(onDismissRequest = { act.dialog.value = null }) {
@@ -409,21 +406,16 @@ private fun ZoomImage(b64: String) {
     var bmp by remember(b64) { mutableStateOf(decodeScaled(b64, req)) }
     if (bmp == null) LaunchedEffect(b64) { bmp = decodeScaled(b64, req) }
     var scale by remember(b64) { mutableStateOf(1f) }
-    var panX by remember(b64) { mutableStateOf(0f) }
-    var panY by remember(b64) { mutableStateOf(0f) }
     val shown = bmp
     Box(
         Modifier.fillMaxSize().pointerInput(b64) {
-            detectTransformGestures { _, pan, zoom, _ ->
-                scale = (scale * zoom).coerceIn(1f, 4f)
-                panX += pan.x; panY += pan.y
-            }
+            detectTransformGestures { _, _, zoom, _ -> scale = (scale * zoom).coerceIn(1f, 4f) }
         },
         contentAlignment = Alignment.Center
     ) {
         if (shown != null) Image(
             bitmap = shown.asImageBitmap(), contentDescription = null, contentScale = ContentScale.Fit,
-            modifier = Modifier.fillMaxSize().graphicsLayer { scaleX = scale; scaleY = scale; translationX = panX; translationY = panY }
+            modifier = Modifier.fillMaxSize().scale(scale)
         )
     }
 }
