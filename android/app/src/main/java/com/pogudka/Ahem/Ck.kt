@@ -9,11 +9,14 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -27,6 +30,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -41,7 +45,7 @@ internal suspend fun awaitOnce(ref: com.google.firebase.database.DatabaseReferen
     suspendCancellableCoroutine { cont ->
         val l = object : ValueEventListener {
             override fun onDataChange(s: DataSnapshot) { if (cont.isActive) cont.resume(s) }
-            override fun onCancelled(e: DatabaseError) { if (cont.isActive) cont.resume(e.snapshot) }
+            override fun onCancelled(e: DatabaseError) { if (cont.isActive) cont.resumeWith(Result.failure(RuntimeException(e.message ?: "db"))) }
         }
         ref.addListenerForSingleValueEvent(l)
         cont.invokeOnCancellation { try { ref.removeEventListener(l) } catch (t: Throwable) {} }
@@ -65,7 +69,8 @@ internal fun Avatar(b64: String, nick: String, size: Dp) {
     val ctx = LocalContext.current
     val px = (size.value * ctx.resources.displayMetrics.density).toInt().coerceAtLeast(2)
     var bmp by remember(b64, nick, px) { mutableStateOf<Bitmap?>(if (b64.isNotEmpty()) decodeScaled(b64, px) else null) }
-    val shown = bmp ?: avatarBitmapC(nick, px)
+    if (bmp == null && b64.isNotEmpty()) LaunchedEffect(b64, px) { bmp = decodeScaled(b64, px) }
+    val shown = bmp?.let { makeCircularBitmap(it, px) } ?: avatarBitmapC(nick, px)
     Image(bitmap = shown.asImageBitmap(), contentDescription = null, modifier = Modifier.size(size).clip(CircleShape))
 }
 
@@ -88,9 +93,9 @@ internal fun AuthorAvatar(uid: String, nickFallback: String, size: Dp) {
 }
 
 @Composable
-internal fun CardSurface(modifier: Modifier = Modifier, radius: Int = 18, filled: Boolean = true, onClick: (() -> Unit)? = null, content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
+internal fun CardSurface(modifier: Modifier = Modifier, radius: Int = 18, filled: Boolean = true, onClick: (() -> Unit)? = null, content: @Composable ColumnScope.() -> Unit) {
     val shape = RoundedCornerShape(radius.dp)
-    androidx.compose.foundation.layout.Column(
+    Column(
         modifier = modifier
             .background(if (filled) ic(P.surface) else Color.Transparent, shape)
             .border(1.dp, ic(P.border), shape)
@@ -116,13 +121,13 @@ internal fun OutlineButton(text: String, modifier: Modifier = Modifier, onClick:
 @Composable
 internal fun GlassIconButton(res: Int, modifier: Modifier = Modifier, onClick: () -> Unit) {
     Box(modifier = modifier.size(38.dp).clip(CircleShape).background(ic(P.navGlass)).border(1.dp, ic(P.border), CircleShape).clickable { onClick() }, contentAlignment = Alignment.Center) {
-        androidx.compose.material3.Icon(painter = androidx.compose.ui.res.painterResource(res), contentDescription = null, tint = ic(P.text), modifier = Modifier.size(20.dp))
+        Icon(painter = painterResource(res), contentDescription = null, tint = ic(P.text), modifier = Modifier.size(20.dp))
     }
 }
 
 @Composable
-internal fun StatCol(num: Long, label: String, onClick: (() -> Unit)? = null) {
-    androidx.compose.foundation.layout.Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1f).then(if (onClick != null) Modifier.clickable { onClick() } else Modifier)) {
+internal fun StatCol(num: Long, label: String, modifier: Modifier = Modifier, onClick: (() -> Unit)? = null) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = modifier.then(if (onClick != null) Modifier.clickable { onClick() } else Modifier)) {
         Text(fmtNum(num), color = ic(P.text), fontSize = 18.sp, fontWeight = FontWeight.Bold)
         Text(label, color = ic(P.textSec), fontSize = 11.sp)
     }
