@@ -21,6 +21,7 @@ internal class GlassDrawable : Drawable() {
     private val innerPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val hiPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val sheenPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val edgePaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val rect = RectF()
     private val path = Path()
     private var radius = 0f
@@ -30,7 +31,7 @@ internal class GlassDrawable : Drawable() {
     fun setRadius(r: Float) { radius = r }
     fun setBlurRadius(px: Float) { blurPx = px.toInt().coerceIn(12, 120) }
     fun setGlassTint(color: Int) { tintPaint.color = color }
-    fun requestRefresh() {} // фон моет система, bitmap не нужен
+    fun requestRefresh() {}
 
     fun setBorder(color: Int, widthPx: Float) {
         borderPaint.color = color
@@ -41,7 +42,8 @@ internal class GlassDrawable : Drawable() {
         innerPaint.strokeWidth = widthPx
     }
 
-    // host держим для симметрии вызова; реально нужен только exclude (сама пилюля)
+    // НИКАКИХ Outline/RenderEffect/PixelCopy как символов — иначе unresolved на низком compileSdk.
+    // Системный блюр фона за вьюхой включается строкой через рефлексию (compile-safe, runtime 31+).
     fun attach(win: Window, host: View, exclude: View) {
         if (Build.VERSION.SDK_INT >= 31) {
             try {
@@ -63,12 +65,18 @@ internal class GlassDrawable : Drawable() {
         canvas.save()
         canvas.clipPath(path)
         canvas.drawRect(rect, tintPaint)
-        hiPaint.shader = LinearGradient(0f, 0f, 0f, h * 0.5f, 0x59FFFFFF, 0x00FFFFFF, Shader.TileMode.CLAMP)
+        // верхний specular-блик
+        hiPaint.shader = LinearGradient(0f, 0f, 0f, h * 0.5f, 0x66FFFFFF, 0x00FFFFFF, Shader.TileMode.CLAMP)
         canvas.drawRect(rect, hiPaint)
         hiPaint.shader = null
-        sheenPaint.shader = LinearGradient(0f, 0f, w, h, 0x14FFFFFF, 0x00000000, Shader.TileMode.CLAMP)
+        // диагональный сдвиг света = «жидкость»
+        sheenPaint.shader = LinearGradient(0f, 0f, w, h, 0x1AFFFFFF, 0x00000000, Shader.TileMode.CLAMP)
         canvas.drawRect(rect, sheenPaint)
         sheenPaint.shader = null
+        // внутренняя световая кромка снизу (преломление края)
+        edgePaint.shader = LinearGradient(0f, h, 0f, h * 0.6f, 0x33FFFFFF, 0x00000000, Shader.TileMode.CLAMP)
+        canvas.drawRect(rect, edgePaint)
+        edgePaint.shader = null
         canvas.restore()
 
         canvas.drawPath(path, borderPaint)
