@@ -64,7 +64,6 @@ internal fun refreshProfile(act: MainActivity) {
 
 internal fun openUserProfile(act: MainActivity, userId: String, nick: String) {
     act.viewingUserId = userId
-    act.profileMode.value = 0
     act.showTab(3, keep = true)
 }
 
@@ -88,7 +87,6 @@ private fun refreshProfileData(act: MainActivity) {
             act.profNick.value = "@$nick"
             act.profName.value = nick
             act.profBio.value = s.child("bio").getValue(String::class.java) ?: ""
-            loadProfileGrid(act, gen, targetId)
         }
         override fun onCancelled(e: DatabaseError) {
             if (gen != act.profileGen) return
@@ -96,12 +94,11 @@ private fun refreshProfileData(act: MainActivity) {
             act.profNick.value = "@$fn"
             act.profName.value = fn
             act.profAvatarB64.value = act.currentAvatar
-            loadProfileGrid(act, gen, targetId)
         }
     })
 }
 
-private fun loadProfileGrid(act: MainActivity, gen: Int, targetId: String) {
+private fun loadProfileGrid(act: MainActivity, gen: Int, targetId: String, mode: Int, onDone: (List<DataSnapshot>, Long, Long) -> Unit) {
     var psSnap: DataSnapshot? = null
     var postsDone = false
     var statsDone = false
@@ -116,14 +113,11 @@ private fun loadProfileGrid(act: MainActivity, gen: Int, targetId: String) {
                 val isMine = p.child("authorId").getValue(String::class.java) == targetId
                 val liked = act.statsMap[p.key ?: ""]?.child("likedBy")?.child(targetId)?.value != null
                 if (isMine) { own++; likes += (act.statsMap[p.key ?: ""]?.child("likes")?.value as? Number)?.toLong() ?: 0L }
-                if (act.profileMode.value == 0 && isMine) grid.add(p)
-                if (act.profileMode.value == 1 && liked) grid.add(p)
+                if (mode == 0 && isMine) grid.add(p)
+                if (mode == 1 && liked) grid.add(p)
             }
         }
-        act.profPosts.value = own
-        act.profLikes.value = likes
-        act.profGrid.clear()
-        act.profGrid.addAll(grid.sortedByDescending { getTs(it) })
+        onDone(grid.sortedByDescending { getTs(it) }, own, likes)
     }
     readOnce(act.database.child("posts"), act, 3,
         { s -> psSnap = s; postsDone = true; finish() },
@@ -135,8 +129,18 @@ private fun loadProfileGrid(act: MainActivity, gen: Int, targetId: String) {
 internal fun ProfileScreen(act: MainActivity) {
     val target by act.profTarget
     val isMe = target == act.currentUserId
-    val mode by act.profileMode
-    LaunchedEffect(target, mode, act.currentUserId) { if (target.isNotEmpty()) refreshProfileData(act) }
+    var mode by remember { mutableStateOf(0) }
+    val grid = remember { mutableStateListOf<DataSnapshot>() }
+    var postsCount by remember { mutableStateOf(0L) }
+    var likesCount by remember { mutableStateOf(0L) }
+    LaunchedEffect(target) { mode = 0 }
+    LaunchedEffect(target, mode, act.currentUserId, act.statsVer.value) {
+        if (target.isEmpty()) return@LaunchedEffect
+        val gen = act.profileGen
+        loadProfileGrid(act, gen, target, mode) { g, pc, lc ->
+            if (gen == act.profileGen) { grid.clear(); grid.addAll(g); postsCount = pc; likesCount = lc }
+        }
+    }
     Column(Modifier.fillMaxSize().background(ic(P.bg)).verticalScroll(rememberScrollState())) {
         Row(Modifier.fillMaxWidth().padding(18.dp, 14.dp, 18.dp, 16.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(act.profNick.value.ifEmpty { "@" }, color = ic(P.text), fontSize = 22.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
@@ -145,10 +149,10 @@ internal fun ProfileScreen(act: MainActivity) {
         Row(Modifier.fillMaxWidth().padding(18.dp, 0.dp, 18.dp, 16.dp), verticalAlignment = Alignment.CenterVertically) {
             Avatar(act.profAvatarB64.value, act.profName.value, 84.dp)
             Spacer(Modifier.width(20.dp))
-            StatCol(act.profPosts.value, "посты")
-            StatCol(act.profFollowers.value, "подписчики", onClick = { act.dialogArg.value = act.currentProfileTargetId; act.dialog.value = "followers" })
-            StatCol(act.profFollowing.value, "подписки", onClick = { act.dialogArg.value = act.currentProfileTargetId; act.dialog.value = "following" })
-            StatCol(act.profLikes.value, "лайки")
+            StatCol(postsCount, "посты", Modifier.weight(1f))
+            StatCol(act.profFollowers.value, "подписчики", Modifier.weight(1f), onClick = { act.dialogArg.value = act.currentProfileTargetId; act.dialog.value = "followers" })
+            StatCol(act.profFollowing.value, "подписки", Modifier.weight(1f), onClick = { act.dialogArg.value = act.currentProfileTargetId; act.dialog.value = "following" })
+            StatCol(likesCount, "лайки", Modifier.weight(1f))
         }
         if (act.profName.value.isNotEmpty()) Text(act.profName.value, color = ic(P.text), fontSize = 15.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(18.dp, 0.dp, 18.dp, 2.dp))
         if (act.profBio.value.isNotEmpty()) Text(act.profBio.value, color = ic(P.text), fontSize = 14.sp, modifier = Modifier.padding(18.dp, 0.dp, 18.dp, 14.dp))
@@ -167,24 +171,23 @@ internal fun ProfileScreen(act: MainActivity) {
                 .border(1.dp, ic(P.border), RoundedCornerShape(14.dp))
                 .padding(4.dp)
         ) {
-            Box(Modifier.weight(1f).height(38.dp).clickable { act.profileMode.value = 0 }, contentAlignment = Alignment.Center) {
+            Box(Modifier.weight(1f).height(38.dp).clickable { mode = 0 }, contentAlignment = Alignment.Center) {
                 Icon(painter = painterResource(R.drawable.ic_grid), contentDescription = null, tint = if (mode == 0) ic(P.text) else ic(P.navInactive), modifier = Modifier.size(22.dp))
             }
-            Box(Modifier.weight(1f).height(38.dp).clickable { act.profileMode.value = 1 }, contentAlignment = Alignment.Center) {
+            Box(Modifier.weight(1f).height(38.dp).clickable { mode = 1 }, contentAlignment = Alignment.Center) {
                 Icon(painter = painterResource(R.drawable.ic_heart), contentDescription = null, tint = if (mode == 1) ic(P.accent) else ic(P.navInactive), modifier = Modifier.size(22.dp))
             }
         }
-        ProfileGrid(act)
+        ProfileGrid(act, grid.toList(), mode)
         Spacer(Modifier.height(96.dp))
     }
 }
 
 @Composable
-private fun ProfileGrid(act: MainActivity) {
-    val grid = act.profGrid.toList()
+private fun ProfileGrid(act: MainActivity, grid: List<DataSnapshot>, mode: Int) {
     if (grid.isEmpty()) {
         Text(
-            if (act.profileMode.value == 0) "Нет постов" else "Нет лайков",
+            if (mode == 0) "Нет постов" else "Нет лайков",
             color = ic(P.textSec), fontSize = 14.sp, textAlign = TextAlign.Center,
             modifier = Modifier.fillMaxWidth().padding(0.dp, 40.dp)
         )
@@ -196,7 +199,7 @@ private fun ProfileGrid(act: MainActivity) {
             Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                 for (c in 0 until 3) {
                     val idx = i + c
-                    if (idx < grid.size) GridTile(act, grid[idx]) else Spacer(Modifier.weight(1f).height(110.dp))
+                    if (idx < grid.size) GridTile(act, grid[idx], Modifier.weight(1f)) else Spacer(Modifier.weight(1f).height(110.dp))
                 }
             }
             i += 3
@@ -205,13 +208,12 @@ private fun ProfileGrid(act: MainActivity) {
 }
 
 @Composable
-private fun GridTile(act: MainActivity, p: DataSnapshot) {
+private fun GridTile(act: MainActivity, p: DataSnapshot, modifier: Modifier = Modifier) {
     val postId = p.key ?: ""
     val txt = p.child("text").getValue(String::class.java) ?: ""
-    val ver by act.statsVer
     val stats = act.statsMap[postId]
     val liked = stats?.child("likedBy")?.child(act.currentUserId)?.value != null
-    var media by remember(postId, ver) { mutableStateOf<String?>(null) }
+    var media by remember(postId, act.statsVer.value) { mutableStateOf<String?>(null) }
     LaunchedEffect(postId) {
         try { val s = awaitOnce(act.database.child("postMedia").child(postId)); media = s.getValue(String::class.java) ?: "" } catch (t: Throwable) { media = "" }
     }
@@ -220,7 +222,7 @@ private fun GridTile(act: MainActivity, p: DataSnapshot) {
     if (bmp == null && first != null) LaunchedEffect(first) { bmp = decodeScaled(first, 360) }
     val shown = bmp
     Box(
-        Modifier.weight(1f).height(110.dp).clip(RoundedCornerShape(6.dp)).background(ic(P.surface))
+        modifier.height(110.dp).clip(RoundedCornerShape(6.dp)).background(ic(P.surface))
             .clickable { act.dialogArg.value = postId; act.dialog.value = "post" }
     ) {
         if (shown != null) Image(bitmap = shown.asImageBitmap(), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
@@ -347,7 +349,7 @@ private fun EditDialog(act: MainActivity) {
             }
             Spacer(Modifier.height(16.dp))
             Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-                Avatar(act.currentAvatar.ifEmpty { act.editAvatarB64.value }, act.currentNick, 96.dp)
+                Avatar(act.currentAvatar, act.currentNick, 96.dp)
                 Spacer(Modifier.height(12.dp))
                 OutlineButton("Сменить аватар", Modifier.fillMaxWidth()) {
                     act.startActivityForResult(
