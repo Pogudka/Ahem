@@ -20,8 +20,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.graphicsLayer
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -101,7 +101,7 @@ fun LiquidGlass(
 
     Box(
         modifier = modifier
-            .graphicsLayer { alpha = if (capturing) 0f else 1f }
+            .alpha(if (capturing) 0f else 1f)
             .clip(shape)
             .border(1.dp, border, shape)
     ) {
