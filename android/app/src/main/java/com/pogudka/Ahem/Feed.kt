@@ -1,423 +1,61 @@
 package com.pogudka.Ahem
 
-import android.animation.ObjectAnimator
-import android.app.Dialog
-import android.content.Intent
-import android.graphics.Bitmap
-import android.text.Editable
-import android.text.TextWatcher
-import android.text.util.Linkify
-import android.view.GestureDetector
-import android.view.Gravity
-import android.view.MotionEvent
-import android.view.ScaleGestureDetector
-import android.view.View
-import android.view.animation.LinearInterpolator
-import android.widget.FrameLayout
-import android.widget.HorizontalScrollView
-import android.widget.ImageView
-import android.widget.LinearLayout
-import android.widget.ScrollView
-import android.widget.TextView
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.graphicsLayer
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.compose.foundation.ExperimentalFoundationApi
 import com.google.firebase.database.DataSnapshot
 import com.google.firebase.database.DatabaseError
+import com.google.firebase.database.MutableData
+import com.google.firebase.database.Transaction
 import com.google.firebase.database.ValueEventListener
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-
-internal fun decodeCached(act: MainActivity, b64: String, px: Int, key: String): Bitmap? {
-    act.imageCache[key]?.let { return it }
-    val b = decodeScaled(b64, px) ?: return null
-    act.imageCache[key] = b
-    return b
-}
-
-internal fun mediaFor(act: MainActivity, postId: String, cb: (String) -> Unit) {
-    act.mediaCache[postId]?.let { cb(it); return }
-    act.database.child("postMedia").child(postId).addListenerForSingleValueEvent(object : ValueEventListener {
-        override fun onDataChange(snapshot: DataSnapshot) {
-            val str = snapshot.getValue(String::class.java) ?: ""
-            if (str.isNotEmpty()) act.mediaCache[postId] = str
-            cb(str)
-        }
-        override fun onCancelled(error: DatabaseError) { cb("") }
-    })
-}
-
-internal fun buildFeed(act: MainActivity): View {
-    val col = LinearLayout(act)
-    col.orientation = LinearLayout.VERTICAL
-    col.setBackgroundColor(P.bg)
-
-    act.authBlock = LinearLayout(act)
-    act.authBlock.orientation = LinearLayout.VERTICAL
-    act.authBlock.setPadding(act.dp(24), act.dp(48), act.dp(24), 0)
-
-    val logo = tv(act, "Ahem", 34f, act.fBold, P.text)
-    val tag = tv(act, "social", 13f, act.fMed, P.textSec)
-    tag.layoutParams = act.lp(-2, -2, act.dp(32))
-
-    act.feedEmail = field(act, "Email")
-    act.feedEmail.layoutParams = act.lp(-1, -2, act.dp(10))
-    act.feedNick = field(act, "Ник (мин. 5 символов)")
-    act.feedNick.layoutParams = act.lp(-1, -2, act.dp(10))
-    act.feedPass = field(act, "Пароль")
-    act.feedPass.inputType = 1
-    act.feedPass.layoutParams = act.lp(-1, -2, act.dp(16))
-
-    val rowAuth = LinearLayout(act)
-    rowAuth.orientation = LinearLayout.HORIZONTAL
-    rowAuth.layoutParams = act.lp(-1, -2, act.dp(12))
-    act.regBtn = btnAccent(act, "Регистрация")
-    act.regBtn.layoutParams = act.lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, act.dp(6))
-    act.wt(act.regBtn, 1f)
-    act.logBtn = btnOutline(act, "Вход")
-    act.logBtn.layoutParams = act.lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
-    act.wt(act.logBtn, 1f)
-    rowAuth.addView(act.regBtn)
-    rowAuth.addView(act.logBtn)
-
-    act.feedStatus = tv(act, "не залогинен", 13f, act.fReg, P.textSec)
-
-    act.authBlock.addView(logo)
-    act.authBlock.addView(tag)
-    act.authBlock.addView(act.feedEmail)
-    act.authBlock.addView(act.feedNick)
-    act.authBlock.addView(act.feedPass)
-    act.authBlock.addView(rowAuth)
-    act.authBlock.addView(act.feedStatus)
-
-    act.feedBlock = LinearLayout(act)
-    act.feedBlock.orientation = LinearLayout.VERTICAL
-    act.feedBlock.visibility = View.GONE
-    act.feedBlock.setBackgroundColor(P.bg)
-
-    val top = LinearLayout(act)
-    top.orientation = LinearLayout.HORIZONTAL
-    top.gravity = Gravity.CENTER_VERTICAL
-    top.setPadding(act.dp(18), act.dp(14), act.dp(18), act.dp(10))
-    val logoS = tv(act, "Ahem", 20f, act.fBold, P.text)
-    logoS.layoutParams = act.lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
-    act.wt(logoS, 1f)
-    top.addView(logoS)
-
-    val composer = LinearLayout(act)
-    composer.orientation = LinearLayout.VERTICAL
-    composer.background = surf(act, 18, filled = true)
-    composer.setPadding(act.dp(14), act.dp(14), act.dp(14), act.dp(14))
-    val compM = LinearLayout.LayoutParams(-1, -2)
-    compM.setMargins(act.dp(14), 0, act.dp(14), act.dp(12))
-    composer.layoutParams = compM
-
-    act.feedPostText = field(act, "Подпись к посту (до 4 фото)")
-    act.feedPostText.layoutParams = act.lp(-1, -2, act.dp(10))
-
-    act.pendingWrap = LinearLayout(act)
-    act.pendingWrap.orientation = LinearLayout.VERTICAL
-    act.pendingWrap.visibility = View.GONE
-    act.pendingWrap.layoutParams = act.lp(-1, -2, act.dp(10))
-    val pendHead = LinearLayout(act)
-    pendHead.orientation = LinearLayout.HORIZONTAL
-    pendHead.gravity = Gravity.CENTER_VERTICAL
-    act.pendingInfo = tv(act, "", 12f, act.fMed, P.textSec)
-    act.pendingInfo.layoutParams = act.lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
-    act.wt(act.pendingInfo, 1f)
-    val clearIv = iconRound(act, R.drawable.ic_close, P.text, act.dp(30))
-    pendHead.addView(act.pendingInfo)
-    pendHead.addView(clearIv)
-    val pendScroll = HorizontalScrollView(act)
-    pendScroll.layoutParams = act.lp(-1, -2, 0)
-    pendScroll.isHorizontalScrollBarEnabled = false
-    act.pendingRow = LinearLayout(act)
-    act.pendingRow.orientation = LinearLayout.HORIZONTAL
-    pendScroll.addView(act.pendingRow)
-    act.pendingWrap.addView(pendHead)
-    act.pendingWrap.addView(pendScroll)
-
-    val cRow = LinearLayout(act)
-    cRow.orientation = LinearLayout.HORIZONTAL
-    cRow.gravity = Gravity.CENTER_VERTICAL
-    val camIv = iconRound(act, R.drawable.ic_camera, P.text, act.dp(44))
-    val pubBtn = btnAccent(act, "Опубликовать")
-    val pubLp = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT)
-    pubLp.marginStart = act.dp(10)
-    pubBtn.layoutParams = pubLp
-    act.wt(pubBtn, 1f)
-    cRow.addView(camIv)
-    cRow.addView(pubBtn)
-
-    composer.addView(act.feedPostText)
-    composer.addView(act.pendingWrap)
-    composer.addView(cRow)
-
-    val searchRow = LinearLayout(act)
-    searchRow.orientation = LinearLayout.HORIZONTAL
-    searchRow.gravity = Gravity.CENTER_VERTICAL
-    val raM = LinearLayout.LayoutParams(-1, -2)
-    raM.setMargins(act.dp(14), 0, act.dp(14), act.dp(12))
-    searchRow.layoutParams = raM
-    act.feedSearch = field(act, "Поиск: текст или @ник")
-    act.feedSearch.layoutParams = act.lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
-    act.wt(act.feedSearch, 1f)
-    val searchClear = iconRound(act, R.drawable.ic_close, P.textSec, act.dp(36))
-    (searchClear.layoutParams as LinearLayout.LayoutParams).marginStart = act.dp(8)
-    searchRow.addView(act.feedSearch)
-    searchRow.addView(searchClear)
-
-    act.feedSearch.addTextChangedListener(object : TextWatcher {
-        override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
-        override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
-        override fun afterTextChanged(s: Editable?) {
-            act.feedQuery = s?.toString()?.trim() ?: ""
-            renderFeed(act)
-        }
-    })
-    searchClear.setOnClickListener {
-        act.feedSearch.setText("")
-    }
-
-    act.feedScroll = ScrollView(act)
-    act.feedScroll.isVerticalScrollBarEnabled = false
-    act.feedScroll.layoutParams = act.lp(-1, 0, 0)
-    act.wt(act.feedScroll, 1f)
-
-    act.ptrRoot = LinearLayout(act)
-    act.ptrRoot.orientation = LinearLayout.VERTICAL
-
-    act.ptrHeader = FrameLayout(act)
-    val phLp = LinearLayout.LayoutParams(-1, 0)
-    act.ptrHeader.layoutParams = phLp
-    act.ptrHeader.clipChildren = true
-    act.ptrSpin = ImageView(act)
-    act.ptrSpin.setImageResource(R.drawable.ic_refresh)
-    act.ptrSpin.setColorFilter(P.textSec)
-    val spinLp = FrameLayout.LayoutParams(act.dp(32), act.dp(32))
-    spinLp.gravity = Gravity.CENTER
-    act.ptrSpin.layoutParams = spinLp
-    act.ptrHeader.addView(act.ptrSpin)
-
-    act.feedBox = LinearLayout(act)
-    act.feedBox.orientation = LinearLayout.VERTICAL
-
-    act.ptrRoot.addView(act.ptrHeader)
-    act.ptrRoot.addView(act.feedBox)
-    act.feedScroll.addView(act.ptrRoot)
-
-    setupPtr(act)
-
-    act.feedBlock.addView(top)
-    act.feedBlock.addView(composer)
-    act.feedBlock.addView(searchRow)
-    act.feedBlock.addView(act.feedScroll)
-
-    act.regBtn.setOnClickListener {
-        if (act.isRegistering) return@setOnClickListener
-        val email = act.feedEmail.text.toString().trim()
-        val nick = act.feedNick.text.toString().trim()
-        val pass = act.feedPass.text.toString()
-        if (email.isEmpty() || nick.isEmpty() || pass.isEmpty()) {
-            act.feedStatus.text = "Заполни все поля"
-            return@setOnClickListener
-        }
-        if (nick.length < 5) {
-            act.feedStatus.text = "Ник минимум 5 символов"
-            return@setOnClickListener
-        }
-        act.isRegistering = true
-        act.regBtn.text = "..."
-        val restore = Runnable {
-            act.isRegistering = false
-            act.regBtn.text = "Регистрация"
-        }
-        act.uiHandler.postDelayed(restore, 15000)
-        isNickTaken(act, nick, "") { taken ->
-            if (taken) {
-                act.uiHandler.removeCallbacks(restore)
-                act.feedStatus.text = "Ник уже занят"
-                act.isRegistering = false
-                act.regBtn.text = "Регистрация"
-                return@isNickTaken
-            }
-            act.auth.createUserWithEmailAndPassword(email, pass).addOnCompleteListener { task ->
-                act.uiHandler.removeCallbacks(restore)
-                if (task.isSuccessful) {
-                    val userId = act.auth.currentUser?.uid ?: return@addOnCompleteListener
-                    act.database.child("users").child(userId).child("email").setValue(email)
-                    act.database.child("users").child(userId).child("nick").setValue(nick)
-                    act.currentUserId = userId
-                    act.currentNick = nick
-                    act.currentEmail = email
-                    act.viewingUserId = userId
-                    saveAccount(act, userId, nick, email, pass)
-                    act.saveSessionPrefs()
-                    enterFeedMode(act)
-                    loadMyFollowing(act) { renderFeed(act) }
-                } else {
-                    act.feedStatus.text = authErrorText(task.exception)
-                }
-                act.isRegistering = false
-                act.regBtn.text = "Регистрация"
-            }
-        }
-    }
-
-    act.logBtn.setOnClickListener {
-        if (act.isLoggingIn) return@setOnClickListener
-        val email = act.feedEmail.text.toString().trim()
-        val pass = act.feedPass.text.toString()
-        if (email.isEmpty() || pass.isEmpty()) {
-            act.feedStatus.text = "Email + пароль"
-            return@setOnClickListener
-        }
-        act.isLoggingIn = true
-        act.logBtn.text = "..."
-        val restore = Runnable {
-            act.isLoggingIn = false
-            act.logBtn.text = "Вход"
-        }
-        act.uiHandler.postDelayed(restore, 15000)
-        act.auth.signInWithEmailAndPassword(email, pass).addOnCompleteListener { task ->
-            act.uiHandler.removeCallbacks(restore)
-            if (task.isSuccessful) {
-                val userId = act.auth.currentUser?.uid ?: return@addOnCompleteListener
-                act.currentUserId = userId
-                act.currentEmail = email
-                act.viewingUserId = userId
-                enterFeedMode(act)
-                loadMyFollowing(act) { renderFeed(act) }
-                act.database.child("users").child(userId).addListenerForSingleValueEvent(object : ValueEventListener {
-                    override fun onDataChange(snapshot: DataSnapshot) {
-                        act.currentNick = snapshot.child("nick").getValue(String::class.java) ?: "Аноним"
-                        act.currentAvatar = snapshot.child("avatar").getValue(String::class.java) ?: ""
-                        saveAccount(act, userId, act.currentNick, email, pass)
-                        act.saveSessionPrefs()
-                        renderFeed(act)
-                    }
-                    override fun onCancelled(error: DatabaseError) { dbDenied(act, error) }
-                })
-            } else {
-                act.feedStatus.text = authErrorText(task.exception)
-            }
-            act.isLoggingIn = false
-            act.logBtn.text = "Вход"
-        }
-    }
-
-    clearIv.setOnClickListener {
-        act.pendingImages.clear()
-        act.pendingWrap.visibility = View.GONE
-    }
-
-    camIv.setOnClickListener {
-        val intent = Intent(Intent.ACTION_GET_CONTENT)
-        intent.type = "image/*"
-        intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
-        act.startActivityForResult(Intent.createChooser(intent, "Выбери фото"), act.PICK_IMAGES)
-    }
-
-    pubBtn.setOnClickListener {
-        val text = act.feedPostText.text.toString()
-        if (text.isEmpty() && act.pendingImages.isEmpty()) return@setOnClickListener
-        val postId = act.database.child("posts").push().key ?: return@setOnClickListener
-        val post = HashMap<String, Any>()
-        post["authorId"] = act.currentUserId
-        post["authorNick"] = act.currentNick
-        post["text"] = text
-        post["timestamp"] = System.currentTimeMillis()
-        act.database.child("posts").child(postId).setValue(post)
-        if (act.pendingImages.isNotEmpty()) {
-            act.database.child("postMedia").child(postId).setValue(act.pendingImages.joinToString(","))
-        }
-        val stats = HashMap<String, Any>()
-        stats["likes"] = 0
-        stats["views"] = 0
-        stats["likedBy"] = HashMap<String, Boolean>()
-        stats["viewedBy"] = HashMap<String, Boolean>()
-        act.database.child("postStats").child(postId).setValue(stats)
-        act.feedPostText.setText("")
-        act.pendingImages.clear()
-        act.pendingWrap.visibility = View.GONE
-        loadFeed(act)
-    }
-
-    col.addView(act.authBlock)
-    col.addView(act.feedBlock)
-    return col
-}
-
-internal fun setupPtr(act: MainActivity) {
-    val threshold = act.dp(72)
-    val maxPull = act.dp(120)
-    act.feedScroll.setOnTouchListener { _, ev ->
-        if (act.ptrLoading) return@setOnTouchListener false
-        when (ev.actionMasked) {
-            MotionEvent.ACTION_DOWN -> {
-                act.ptrStartY = ev.rawY
-                act.ptrPulling = false
-            }
-            MotionEvent.ACTION_MOVE -> {
-                val dy = ev.rawY - act.ptrStartY
-                if (act.feedScroll.scrollY <= 0 && dy > 0) {
-                    act.ptrPulling = true
-                    val pull = (dy * 0.5f).coerceIn(0f, maxPull.toFloat())
-                    val h = act.ptrHeader.layoutParams as LinearLayout.LayoutParams
-                    h.height = pull.toInt()
-                    act.ptrHeader.layoutParams = h
-                    val rot = (pull / maxPull.toFloat()) * 360f
-                    act.ptrSpin.rotation = rot
-                    act.feedScroll.parent?.requestDisallowInterceptTouchEvent(true)
-                }
-            }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                if (act.ptrPulling) {
-                    val h = act.ptrHeader.layoutParams as LinearLayout.LayoutParams
-                    if (h.height >= threshold) {
-                        startPtrLoading(act, maxPull)
-                    } else {
-                        collapsePtr(act)
-                    }
-                    act.feedScroll.parent?.requestDisallowInterceptTouchEvent(false)
-                }
-                act.ptrPulling = false
-            }
-        }
-        false
-    }
-}
-
-internal fun startPtrLoading(act: MainActivity, maxPull: Int) {
-    act.ptrLoading = true
-    val h = act.ptrHeader.layoutParams as LinearLayout.LayoutParams
-    h.height = maxPull
-    act.ptrHeader.layoutParams = h
-    act.ptrAnimator?.cancel()
-    act.ptrAnimator = ObjectAnimator.ofFloat(act.ptrSpin, "rotation", act.ptrSpin.rotation, act.ptrSpin.rotation + 360f * 4f).apply {
-        duration = 1200
-        interpolator = LinearInterpolator()
-        repeatCount = ObjectAnimator.INFINITE
-        repeatMode = ObjectAnimator.RESTART
-        start()
-    }
-    loadFeed(act) { collapsePtr(act) }
-}
-
-internal fun collapsePtr(act: MainActivity) {
-    act.ptrAnimator?.cancel()
-    act.ptrAnimator = null
-    val h = act.ptrHeader.layoutParams as LinearLayout.LayoutParams
-    h.height = 0
-    act.ptrHeader.layoutParams = h
-    act.ptrSpin.rotation = 0f
-    act.ptrLoading = false
-}
-
-internal fun enterFeedMode(act: MainActivity) {
-    act.authBlock.visibility = View.GONE
-    act.feedBlock.visibility = View.VISIBLE
-    loadFeed(act)
-    scheduleMigration(act)
-}
 
 internal fun loadFeed(act: MainActivity, onDone: (() -> Unit)? = null) {
     act.feedGen += 1
@@ -425,422 +63,469 @@ internal fun loadFeed(act: MainActivity, onDone: (() -> Unit)? = null) {
     var postsSnap: DataSnapshot? = null
     var postsDone = false
     var statsDone = false
-    fun tryFinish() {
+    fun finish() {
         if (gen != act.feedGen) return
         if (!postsDone || !statsDone) return
-        act.lastPosts.clear()
-        if (postsSnap != null) for (c in postsSnap!!.children) act.lastPosts.add(c)
-        renderFeed(act)
+        act.postsRaw.clear()
+        postsSnap?.let { s -> for (c in s.children) act.postsRaw.add(c) }
+        act.statsVer.value++
         onDone?.invoke()
     }
     readOnce(act.database.child("posts"), act, 3,
-        { s -> postsSnap = s; postsDone = true; tryFinish() },
-        { postsSnap = null; postsDone = true; tryFinish() })
-    readStatsInto(act) {
-        statsDone = true
-        tryFinish()
+        { s -> postsSnap = s; postsDone = true; finish() },
+        { postsSnap = null; postsDone = true; finish() })
+    readStatsInto(act) { statsDone = true; finish() }
+}
+
+internal fun enterFeedMode(act: MainActivity) {
+    act.authScreen.value = false
+    loadFeed(act)
+    scheduleMigration(act)
+}
+
+internal fun toggleLike(act: MainActivity, postId: String) {
+    if (act.currentUserId.isEmpty()) return
+    txWithRetry(act.database.child("postStats").child(postId), act, 3, { md ->
+        val likes = (md.child("likes").value as? Number)?.toInt() ?: 0
+        val lb = md.child("likedBy")
+        if (lb.child(act.currentUserId).value != null) {
+            lb.child(act.currentUserId).value = null
+            md.child("likes").value = maxOf(0, likes - 1)
+        } else {
+            lb.child(act.currentUserId).value = true
+            md.child("likes").value = likes + 1
+        }
+        Transaction.success(md)
+    }) { committed, data, _ ->
+        if (committed && data != null) { act.statsMap[postId] = data; act.statsVer.value++ }
     }
 }
 
-internal fun renderFeed(act: MainActivity) {
-    act.viewsTvMap.clear()
-    act.feedBox.removeAllViews()
-    val q = act.feedQuery.lowercase()
-    val sorted = act.lastPosts.sortedByDescending { getTs(it) }
-    var shown = 0
-    for (post in sorted) {
-        if (shown >= act.FEED_LIMIT) break
-        if (q.isNotEmpty()) {
-            val text = (post.child("text").getValue(String::class.java) ?: "").lowercase()
-            val nick = (post.child("authorNick").getValue(String::class.java) ?: "").lowercase()
-            val qq = q.removePrefix("@")
-            if (!text.contains(qq) && !nick.contains(qq)) continue
+internal fun incViews(act: MainActivity, postId: String) {
+    if (act.currentUserId.isEmpty() || postId in act.viewedLocally) return
+    txWithRetry(act.database.child("postStats").child(postId), act, 3, { md ->
+        val views = (md.child("views").value as? Number)?.toLong() ?: 0L
+        val vb = md.child("viewedBy")
+        if (vb.child(act.currentUserId).value != null) {
+            act.viewedLocally.add(postId)
+            return@txWithRetry Transaction.success(md)
         }
-        try {
-            act.feedBox.addView(buildPostCard(act, post))
-            shown++
-        } catch (e: Exception) {
+        vb.child(act.currentUserId).value = true
+        md.child("views").value = views + 1
+        Transaction.success(md)
+    }) { committed, data, _ ->
+        if (committed && data != null) {
+            act.viewedLocally.add(postId)
+            act.statsMap[postId] = data
+            act.statsVer.value++
         }
-    }
-    if (shown == 0) {
-        act.feedBox.addView(tv(act, if (q.isEmpty()) "Лента пуста" else "Ничего не найдено", 15f, act.fMed, P.textSec))
     }
 }
 
-internal fun buildPostCard(act: MainActivity, post: DataSnapshot, onViewsReady: ((TextView) -> Unit)? = null): View {
+@Composable
+internal fun FeedScreen(act: MainActivity) {
+    val authed by act.authScreen
+    val query by act.feedQuery
+    val ver by act.statsVer
+    Column(Modifier.fillMaxSize().background(ic(P.bg))) {
+        if (authed) {
+            Row(Modifier.fillMaxWidth().padding(18.dp, 14.dp, 18.dp, 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("Ahem", color = ic(P.text), fontSize = 20.sp, fontWeight = FontWeight.Bold)
+            }
+            Composer(act)
+            SearchRow(act)
+            val sorted = act.postsRaw.toList()
+                .sortedByDescending { getTs(it) }
+                .filter { p ->
+                    if (query.isEmpty()) true
+                    else {
+                        val q = query.lowercase().removePrefix("@")
+                        val t = (p.child("text").getValue(String::class.java) ?: "").lowercase()
+                        val n = (p.child("authorNick").getValue(String::class.java) ?: "").lowercase()
+                        t.contains(q) || n.contains(q)
+                    }
+                }
+                .take(act.FEED_LIMIT)
+            LazyColumn(
+                Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(14.dp, 0.dp, 14.dp, 96.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                if (sorted.isEmpty()) {
+                    item {
+                        Text(
+                            if (query.isEmpty()) "Лента пуста" else "Ничего не найдено",
+                            color = ic(P.textSec), fontSize = 15.sp,
+                            modifier = Modifier.padding(0.dp, 20.dp)
+                        )
+                    }
+                }
+                items(sorted) { p -> PostCard(act, p) }
+            }
+        } else {
+            AuthForm(act)
+        }
+    }
+}
+
+@Composable
+private fun SearchRow(act: MainActivity) {
+    val q by act.feedQuery
+    Row(Modifier.fillMaxWidth().padding(14.dp, 0.dp, 14.dp, 12.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            Modifier.weight(1f)
+                .background(ic(P.fieldBg), RoundedCornerShape(14.dp))
+                .border(1.dp, ic(P.border), RoundedCornerShape(14.dp))
+                .padding(16.dp, 13.dp)
+        ) {
+            BasicTextField(
+                value = q, onValueChange = { act.feedQuery.value = it }, singleLine = true,
+                textStyle = TextStyle(color = ic(P.text), fontSize = 15.sp),
+                modifier = Modifier.fillMaxWidth(),
+                decorationBox = { inner -> if (q.isEmpty()) Text("Поиск: текст или @ник", color = ic(P.textSec), fontSize = 15.sp); inner() }
+            )
+        }
+        if (q.isNotEmpty()) GlassIconButton(R.drawable.ic_close, Modifier.padding(start = 8.dp)) { act.feedQuery.value = "" }
+    }
+}
+
+@Composable
+private fun Composer(act: MainActivity) {
+    val txt = remember { mutableStateOf("") }
+    CardSurface(Modifier.fillMaxWidth().padding(14.dp, 0.dp, 14.dp, 12.dp), 18, true) {
+        Box(
+            Modifier.fillMaxWidth().padding(14.dp, 14.dp, 14.dp, 10.dp)
+                .background(ic(P.fieldBg), RoundedCornerShape(14.dp))
+                .border(1.dp, ic(P.border), RoundedCornerShape(14.dp))
+                .padding(16.dp, 13.dp)
+        ) {
+            BasicTextField(
+                value = txt.value, onValueChange = { txt.value = it },
+                textStyle = TextStyle(color = ic(P.text), fontSize = 15.sp),
+                modifier = Modifier.fillMaxWidth(),
+                decorationBox = { inner -> if (txt.value.isEmpty()) Text("Подпись к посту (до 4 фото)", color = ic(P.textSec), fontSize = 15.sp); inner() }
+            )
+        }
+        if (act.pendingImages.isNotEmpty()) {
+            Row(Modifier.fillMaxWidth().padding(14.dp, 0.dp, 14.dp, 10.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                for (im in act.pendingImages.toList()) Thumb(im, 84)
+            }
+        }
+        Row(Modifier.fillMaxWidth().padding(14.dp, 0.dp, 14.dp, 14.dp), verticalAlignment = Alignment.CenterVertically) {
+            GlassIconButton(R.drawable.ic_camera) { pickImages(act) }
+            Spacer(Modifier.width(10.dp))
+            AccentButton("Опубликовать", Modifier.weight(1f)) {
+                val text = txt.value
+                if (text.isEmpty() && act.pendingImages.isEmpty()) return@AccentButton
+                val postId = act.database.child("posts").push().key ?: return@AccentButton
+                val post = HashMap<String, Any>()
+                post["authorId"] = act.currentUserId
+                post["authorNick"] = act.currentNick
+                post["text"] = text
+                post["timestamp"] = System.currentTimeMillis()
+                act.database.child("posts").child(postId).setValue(post)
+                if (act.pendingImages.isNotEmpty()) act.database.child("postMedia").child(postId).setValue(act.pendingImages.joinToString(","))
+                val stats = HashMap<String, Any>()
+                stats["likes"] = 0; stats["views"] = 0
+                stats["likedBy"] = HashMap<String, Boolean>(); stats["viewedBy"] = HashMap<String, Boolean>()
+                act.database.child("postStats").child(postId).setValue(stats)
+                txt.value = ""
+                act.pendingImages.clear()
+                loadFeed(act)
+            }
+        }
+    }
+}
+
+@Composable
+private fun Thumb(b64: String, dpSize: Int) {
+    val ctx = LocalContext.current
+    val px = (dpSize * ctx.resources.displayMetrics.density).toInt().coerceAtLeast(2)
+    var bmp by remember(b64, px) { mutableStateOf(decodeScaled(b64, px)) }
+    if (bmp == null) LaunchedEffect(b64, px) { bmp = decodeScaled(b64, px) }
+    val shown = bmp
+    Box(
+        Modifier.size(dpSize.dp).clip(RoundedCornerShape(12.dp))
+            .background(ic(P.surface)).border(1.dp, ic(P.border), RoundedCornerShape(12.dp))
+    ) {
+        if (shown != null) Image(bitmap = shown.asImageBitmap(), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+    }
+}
+
+@Composable
+internal fun PostCard(act: MainActivity, post: DataSnapshot) {
     val postId = post.key ?: ""
     val authorId = post.child("authorId").getValue(String::class.java) ?: ""
     val authorNick = post.child("authorNick").getValue(String::class.java) ?: "?"
     val text = post.child("text").getValue(String::class.java) ?: ""
     val ts = getTs(post)
+    val ver by act.statsVer
     val stats = act.statsMap[postId]
     val likeCount = (stats?.child("likes")?.value as? Number)?.toLong() ?: 0L
     val viewCount = (stats?.child("views")?.value as? Number)?.toLong() ?: 0L
     val liked = stats?.child("likedBy")?.child(act.currentUserId)?.value != null
-    val timeStr = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(ts))
-    val imgW = act.resources.displayMetrics.widthPixels - act.dp(28)
-
-    val card = LinearLayout(act)
-    card.orientation = LinearLayout.VERTICAL
-    card.background = surf(act, 18, filled = true)
-    val cm2 = LinearLayout.LayoutParams(-1, LinearLayout.LayoutParams.WRAP_CONTENT)
-    cm2.setMargins(act.dp(14), 0, act.dp(14), act.dp(12))
-    card.layoutParams = cm2
-
-    val header = LinearLayout(act)
-    header.orientation = LinearLayout.HORIZONTAL
-    header.setPadding(act.dp(14), act.dp(14), act.dp(14), act.dp(10))
-    header.gravity = Gravity.CENTER_VERTICAL
-    val avatarSize = act.dp(40)
-    val avatarImg = ImageView(act)
-    val avParams = LinearLayout.LayoutParams(avatarSize, avatarSize)
-    avParams.marginEnd = act.dp(12)
-    avatarImg.layoutParams = avParams
-    avatarImg.scaleType = ImageView.ScaleType.FIT_CENTER
-    if (act.avatarCache.containsKey(authorId)) {
-        avatarImg.setImageBitmap(act.avatarCache[authorId])
-    } else {
-        avatarImg.setImageBitmap(makeCircularBitmap(createAvatarBitmap(act, authorNick), avatarSize))
-        act.database.child("users").child(authorId).child("avatar")
-            .addListenerForSingleValueEvent(object : ValueEventListener {
-                override fun onDataChange(avatarSnapshot: DataSnapshot) {
-                    val s = avatarSnapshot.getValue(String::class.java) ?: ""
-                    if (s.isNotEmpty()) {
-                        val b = decodeScaled(s, avatarSize)
-                        if (b != null) {
-                            val circ = makeCircularBitmap(b, avatarSize)
-                            act.avatarCache[authorId] = circ
-                            avatarImg.setImageBitmap(circ)
-                        }
-                    }
-                }
-                override fun onCancelled(error: DatabaseError) {}
-            })
-    }
-    avatarImg.setOnClickListener { openUserProfile(act, authorId, authorNick) }
-    val nickTime = LinearLayout(act)
-    nickTime.orientation = LinearLayout.VERTICAL
-    val np = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT)
-    np.weight = 1f
-    nickTime.layoutParams = np
-    val nickView = tv(act, authorNick, 15f, act.fSemi, P.text)
-    nickView.setOnClickListener { openUserProfile(act, authorId, authorNick) }
-    val timeView = tv(act, timeStr, 12f, act.fReg, P.textSec)
-    nickTime.addView(nickView)
-    nickTime.addView(timeView)
-    header.addView(avatarImg)
-    header.addView(nickTime)
-    card.addView(header)
-
-    if (text.isNotEmpty()) {
-        val bt = TextView(act)
-        bt.typeface = act.fReg
-        bt.textSize = 15f
-        bt.setTextColor(P.text)
-        bt.setPadding(act.dp(14), 0, act.dp(14), act.dp(12))
-        bt.layoutParams = act.lp(-1, LinearLayout.LayoutParams.WRAP_CONTENT, 0)
-        bt.text = text
-        Linkify.addLinks(bt, Linkify.WEB_URLS)
-        bt.movementMethod = android.text.method.LinkMovementMethod.getInstance()
-        bt.setLinkTextColor(P.text)
-        card.addView(bt)
-    }
-
-    val mediaContainer = LinearLayout(act)
-    mediaContainer.orientation = LinearLayout.VERTICAL
-    val mcLp = LinearLayout.LayoutParams(-1, LinearLayout.LayoutParams.WRAP_CONTENT)
-    mediaContainer.layoutParams = mcLp
-    card.addView(mediaContainer)
-    mediaFor(act, postId) { str ->
-        try {
-            fillMedia(act, mediaContainer, str, postId, imgW)
-        } catch (e: Exception) {
+    val timeStr = remember(ts) { SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(ts)) }
+    CardSurface(Modifier.fillMaxWidth(), 18, true) {
+        Row(Modifier.fillMaxWidth().padding(14.dp, 14.dp, 14.dp, 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.clickable { openUserProfile(act, authorId, authorNick) }) { AuthorAvatar(authorId, authorNick, 40.dp) }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f).clickable { openUserProfile(act, authorId, authorNick) }) {
+                Text(authorNick, color = ic(P.text), fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                Text(timeStr, color = ic(P.textSec), fontSize = 12.sp)
+            }
+        }
+        if (text.isNotEmpty()) Text(text, color = ic(P.text), fontSize = 15.sp, modifier = Modifier.fillMaxWidth().padding(14.dp, 0.dp, 14.dp, 12.dp))
+        MediaBlock(act, postId)
+        Row(Modifier.fillMaxWidth().padding(14.dp, 4.dp, 14.dp, 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.clickable { toggleLike(act, postId) }, verticalAlignment = Alignment.CenterVertically) {
+                Icon(painter = painterResource(if (liked) R.drawable.ic_heart else R.drawable.ic_heart_outline), contentDescription = null, tint = if (liked) ic(P.heartOn) else ic(P.textSec), modifier = Modifier.size(22.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("♥ " + fmtNum(likeCount), color = ic(P.text), fontSize = 14.sp, fontWeight = FontWeight.Medium)
+            }
+            Spacer(Modifier.width(16.dp))
+            Icon(painter = painterResource(R.drawable.ic_eye), contentDescription = null, tint = ic(P.textSec), modifier = Modifier.size(20.dp))
+            Spacer(Modifier.width(6.dp))
+            Text(fmtNum(viewCount), color = ic(P.textSec), fontSize = 13.sp)
+            if (authorId != act.currentUserId && authorId.isNotEmpty() && authorId !in act.myFollowingIds) {
+                Spacer(Modifier.weight(1f))
+                OutlineButton("+ @$authorNick") { followUser(act, authorId, authorNick) }
+            }
         }
     }
-
-    val actRow = LinearLayout(act)
-    actRow.orientation = LinearLayout.HORIZONTAL
-    actRow.setPadding(act.dp(14), act.dp(4), act.dp(14), act.dp(12))
-    actRow.gravity = Gravity.CENTER_VERTICAL
-
-    val heartIv = icon(act, R.drawable.ic_heart_outline, P.textSec, act.dp(22))
-    val countTv = tv(act, "♥ " + fmtNum(likeCount), 14f, act.fSemi, P.text)
-    val countLp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-    countLp.marginStart = act.dp(6)
-    countTv.layoutParams = countLp
-    val likeBox = LinearLayout(act)
-    likeBox.orientation = LinearLayout.HORIZONTAL
-    likeBox.gravity = Gravity.CENTER_VERTICAL
-    likeBox.addView(heartIv)
-    likeBox.addView(countTv)
-    attachLike(act, likeBox, countTv, heartIv, postId, liked)
-    actRow.addView(likeBox)
-
-    val eyeIv = icon(act, R.drawable.ic_eye, P.textSec, act.dp(20))
-    val viewsTv = tv(act, fmtNum(viewCount), 13f, act.fMed, P.textSec)
-    val viewsTvLp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-    viewsTvLp.marginStart = act.dp(6)
-    viewsTvLp.marginEnd = act.dp(6)
-    viewsTv.layoutParams = viewsTvLp
-    val reg = act.viewsTvMap.getOrPut(postId) { ArrayList() }
-    reg.add(viewsTv)
-    val viewsBox = LinearLayout(act)
-    viewsBox.orientation = LinearLayout.HORIZONTAL
-    viewsBox.gravity = Gravity.CENTER_VERTICAL
-    val viewsBoxLp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-    viewsBoxLp.marginStart = act.dp(16)
-    viewsBox.layoutParams = viewsBoxLp
-    viewsBox.addView(eyeIv)
-    viewsBox.addView(viewsTv)
-    actRow.addView(viewsBox)
-
-    if (authorId != act.currentUserId && authorId.isNotEmpty() && authorId !in act.myFollowingIds) {
-        val fb = btnOutline(act, "+ @$authorNick")
-        fb.textSize = 12f
-        val fbLp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-        fbLp.marginStart = act.dp(12)
-        fb.layoutParams = fbLp
-        fb.setOnClickListener { followUser(act, authorId, authorNick); renderFeed(act) }
-        actRow.addView(fb)
-    }
-    card.addView(actRow)
-    onViewsReady?.invoke(viewsTv)
-    return card
 }
 
-internal fun fillMedia(act: MainActivity, container: LinearLayout, imagesStr: String, postId: String, imgW: Int) {
-    container.removeAllViews()
-    if (imagesStr.isEmpty()) return
-    val images = imagesStr.split(",").filter { it.isNotEmpty() }
+@Composable
+private fun MediaBlock(act: MainActivity, postId: String) {
+    var str by remember(postId) { mutableStateOf<String?>(null) }
+    LaunchedEffect(postId) {
+        try {
+            val s = awaitOnce(act.database.child("postMedia").child(postId))
+            str = s.getValue(String::class.java) ?: ""
+        } catch (t: Throwable) { str = "" }
+    }
+    val images = (str ?: "").split(",").filter { it.isNotEmpty() }
     if (images.isEmpty()) return
-    if (images.size == 1) {
-        val b = decodeCached(act, images[0], imgW, "fb$postId")
-        if (b != null) {
-            val box = FrameLayout(act)
-            val bm = LinearLayout.LayoutParams(-1, imgW)
-            bm.setMargins(act.dp(14), 0, act.dp(14), act.dp(12))
-            box.layoutParams = bm
-            box.background = surf(act, 14, filled = true)
-            box.clipToOutline = true
-            val iv = ImageView(act)
-            iv.setImageBitmap(b)
-            iv.scaleType = ImageView.ScaleType.CENTER_CROP
-            iv.layoutParams = FrameLayout.LayoutParams(-1, -1)
-            iv.setOnClickListener { openViewer(act, images, 0) }
-            box.addView(iv)
-            container.addView(box)
-        }
-    } else {
-        val grid = LinearLayout(act)
-        grid.orientation = LinearLayout.VERTICAL
-        val gm = LinearLayout.LayoutParams(-1, LinearLayout.LayoutParams.WRAP_CONTENT)
-        gm.setMargins(act.dp(14), 0, act.dp(14), act.dp(12))
-        grid.layoutParams = gm
-        val cell = (imgW - act.dp(4)) / 2
-        var ri = 0
-        while (ri < images.size) {
-            val row = LinearLayout(act)
-            row.orientation = LinearLayout.HORIZONTAL
-            row.layoutParams = act.lp(-1, LinearLayout.LayoutParams.WRAP_CONTENT, act.dp(4))
-            for (ci in 0 until 2) {
-                val idx = ri + ci
-                if (idx < images.size) {
-                    val b = decodeCached(act, images[idx], cell, "fg${postId}_$idx")
-                    if (b != null) {
-                        val box = FrameLayout(act)
-                        val boxLp = LinearLayout.LayoutParams(0, cell)
-                        boxLp.weight = 1f
-                        if (ci == 0) boxLp.marginEnd = act.dp(4)
-                        box.layoutParams = boxLp
-                        box.background = surf(act, 12, filled = true)
-                        box.clipToOutline = true
-                        val iv = ImageView(act)
-                        iv.setImageBitmap(b)
-                        iv.scaleType = ImageView.ScaleType.CENTER_CROP
-                        iv.layoutParams = FrameLayout.LayoutParams(-1, -1)
-                        val kk = idx
-                        iv.setOnClickListener { openViewer(act, images, kk) }
-                        box.addView(iv)
-                        row.addView(box)
-                    } else {
-                        val empty = View(act)
-                        val eLp = LinearLayout.LayoutParams(0, cell)
-                        eLp.weight = 1f
-                        if (ci == 0) eLp.marginEnd = act.dp(4)
-                        empty.layoutParams = eLp
-                        row.addView(empty)
-                    }
-                } else {
-                    val empty = View(act)
-                    val eLp = LinearLayout.LayoutParams(0, cell)
-                    eLp.weight = 1f
-                    if (ci == 0) eLp.marginEnd = act.dp(4)
-                    empty.layoutParams = eLp
-                    row.addView(empty)
+    val ctx = LocalContext.current
+    val imgW = ctx.resources.displayMetrics.widthPixels - act.dp(28)
+    if (images.size == 1) SingleImage(act, images[0], imgW, images, 0) else GridImages(act, images, imgW)
+}
+
+@Composable
+private fun SingleImage(act: MainActivity, b64: String, px: Int, all: List<String>, start: Int) {
+    var bmp by remember(b64, px) { mutableStateOf(decodeScaled(b64, px)) }
+    if (bmp == null) LaunchedEffect(b64, px) { bmp = decodeScaled(b64, px) }
+    val shown = bmp ?: return
+    val hDp = (px / act.resources.displayMetrics.density)
+    Box(
+        Modifier.fillMaxWidth().height(hDp.dp).padding(14.dp, 0.dp, 14.dp, 12.dp)
+            .clip(RoundedCornerShape(14.dp)).background(ic(P.surface))
+            .clickable { openViewer(act, all, start) }
+    ) {
+        Image(bitmap = shown.asImageBitmap(), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+    }
+}
+
+@Composable
+private fun GridImages(act: MainActivity, images: List<String>, imgW: Int) {
+    val cell = (imgW - act.dp(4)) / 2
+    val cellDp = (cell / act.resources.displayMetrics.density)
+    Column(Modifier.fillMaxWidth().padding(14.dp, 0.dp, 14.dp, 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        var i = 0
+        while (i < images.size) {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                for (c in 0 until 2) {
+                    val idx = i + c
+                    if (idx < images.size) GridCell(act, images[idx], cell, cellDp, images, idx)
+                    else Spacer(Modifier.weight(1f).height(cellDp.dp))
                 }
             }
-            grid.addView(row)
-            ri += 2
+            i += 2
         }
-        container.addView(grid)
     }
 }
 
-internal fun openPostDetail(act: MainActivity, post: DataSnapshot) {
-    val postId = post.key ?: ""
-    val dlg = Dialog(act, android.R.style.Theme_Black_NoTitleBar)
-    val outer = LinearLayout(act)
-    outer.orientation = LinearLayout.VERTICAL
-    outer.setBackgroundColor(P.bg)
-
-    val bar = LinearLayout(act)
-    bar.orientation = LinearLayout.HORIZONTAL
-    bar.gravity = Gravity.CENTER_VERTICAL
-    bar.setPadding(act.dp(8), act.dp(10), act.dp(14), act.dp(10))
-    val backIv = iconRound(act, R.drawable.ic_back, P.text, act.dp(38))
-    backIv.setOnClickListener { dlg.dismiss() }
-    val title = tv(act, "Пост", 17f, act.fBold, P.text)
-    val titleLp = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT)
-    titleLp.weight = 1f
-    titleLp.marginStart = act.dp(12)
-    title.layoutParams = titleLp
-    bar.addView(backIv)
-    bar.addView(title)
-    outer.addView(bar)
-
-    val scroll = ScrollView(act)
-    scroll.isVerticalScrollBarEnabled = false
-    val holder = LinearLayout(act)
-    holder.orientation = LinearLayout.VERTICAL
-    holder.setPadding(0, act.dp(6), 0, act.dp(20))
-    try {
-        holder.addView(buildPostCard(act, post) { vt ->
-            incrementViews(act, postId) { nv -> vt.text = fmtNum(nv) }
-        })
-    } catch (e: Exception) {
-        holder.addView(tv(act, "Не удалось загрузить пост", 14f, act.fMed, P.textSec))
+@Composable
+private fun GridCell(act: MainActivity, b64: String, px: Int, cellDp: Float, all: List<String>, idx: Int) {
+    var bmp by remember(b64, px) { mutableStateOf(decodeScaled(b64, px)) }
+    if (bmp == null) LaunchedEffect(b64, px) { bmp = decodeScaled(b64, px) }
+    val shown = bmp
+    Box(
+        Modifier.weight(1f).height(cellDp.dp).clip(RoundedCornerShape(12.dp)).background(ic(P.surface))
+            .clickable { openViewer(act, all, idx) }
+    ) {
+        if (shown != null) Image(bitmap = shown.asImageBitmap(), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
     }
-    scroll.addView(holder)
-    val slp = LinearLayout.LayoutParams(-1, 0)
-    slp.weight = 1f
-    outer.addView(scroll, slp)
-
-    dlg.setContentView(outer)
-    dlg.window?.setLayout(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
-    dlg.show()
 }
 
-// просмотр фото: только изображение + снизу текст "N / M" без фона; листание свайпом; зум пинчем; закрытие по Back
 internal fun openViewer(act: MainActivity, images: List<String>, start: Int) {
     if (images.isEmpty()) return
-    val dlg = Dialog(act, android.R.style.Theme_Black_NoTitleBar_Fullscreen)
-    val frame = FrameLayout(act)
-    frame.setBackgroundColor(0xFF000000.toInt())
-    val img = ImageView(act)
-    img.scaleType = ImageView.ScaleType.MATRIX
-    frame.addView(img, FrameLayout.LayoutParams(-1, -1))
+    act.viewerImages.value = images
+    act.viewerStart.value = start
+    act.dialog.value = "viewer"
+}
 
-    val cnt = TextView(act)
-    cnt.textSize = 15f
-    cnt.typeface = act.fSemi
-    cnt.setTextColor(0xFFFFFFFF.toInt())
-    cnt.setShadowLayer(act.dp(4).toFloat(), 0f, 0f, 0xAA000000.toInt())
-    cnt.gravity = Gravity.CENTER
-    val clp = FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT)
-    clp.gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-    clp.setMargins(0, 0, 0, act.dp(28))
-    frame.addView(cnt, clp)
-
-    dlg.setContentView(frame)
-    dlg.show()
-
-    var idx = start.coerceIn(0, images.size - 1)
-    var scale = 1f
-    var minS = 1f
-    val maxS = act.ZOOM_MAX
-    var panX = 0f
-    var panY = 0f
-    var bmp: Bitmap? = null
-
-    fun clampPan(vw: Int, vh: Int) {
-        val b = bmp ?: return
-        val mx = maxOf(0f, (b.width * scale - vw) / 2f)
-        val my = maxOf(0f, (b.height * scale - vh) / 2f)
-        panX = panX.coerceIn(-mx, mx)
-        panY = panY.coerceIn(-my, my)
-    }
-
-    fun applyM() {
-        val b = bmp ?: return
-        val vw = img.width
-        val vh = img.height
-        if (vw == 0 || vh == 0) return
-        clampPan(vw, vh)
-        val m = android.graphics.Matrix()
-        m.postScale(scale, scale)
-        m.postTranslate((vw - b.width * scale) / 2f + panX, (vh - b.height * scale) / 2f + panY)
-        img.imageMatrix = m
-    }
-
-    fun setup(b: Bitmap) {
-        bmp = b
-        val vw = img.width
-        val vh = img.height
-        if (vw == 0 || vh == 0) {
-            img.post { setup(b) }
-            return
-        }
-        val fit = minOf(vw.toFloat() / b.width, vh.toFloat() / b.height)
-        minS = minOf(fit, 1f)
-        scale = minOf(fit, 1f)
-        panX = 0f
-        panY = 0f
-        applyM()
-    }
-
-    fun show() {
-        val req = maxOf(act.resources.displayMetrics.widthPixels, act.resources.displayMetrics.heightPixels)
-        val b = decodeScaled(images[idx], req)
-        if (b != null) {
-            img.setImageBitmap(b)
-            img.post { setup(b) }
-        }
-        cnt.text = "${idx + 1} / ${images.size}"
-    }
-
-    val sgd = ScaleGestureDetector(act, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
-        override fun onScale(d: ScaleGestureDetector): Boolean {
-            scale = (scale * d.scaleFactor).coerceIn(minS, maxS)
-            applyM()
-            return true
-        }
-    })
-
-    val gd = GestureDetector(act, object : GestureDetector.SimpleOnGestureListener() {
-        override fun onDown(e: MotionEvent): Boolean = true
-        override fun onScroll(e1: MotionEvent?, e2: MotionEvent, dx: Float, dy: Float): Boolean {
-            if (scale > minS + 0.01f) {
-                panX -= dx
-                panY -= dy
-                applyM()
+@Composable
+internal fun PostDetailDialog(act: MainActivity, postId: String) {
+    val ver by act.statsVer
+    val post = act.postsRaw.toList().firstOrNull { it.key == postId }
+    LaunchedEffect(postId) { incViews(act, postId) }
+    Dialog(onDismissRequest = { act.dialog.value = null }) {
+        Column(Modifier.fillMaxSize().background(ic(P.bg))) {
+            Row(Modifier.fillMaxWidth().padding(8.dp, 10.dp, 14.dp, 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                GlassIconButton(R.drawable.ic_back) { act.dialog.value = null }
+                Spacer(Modifier.width(12.dp))
+                Text("Пост", color = ic(P.text), fontSize = 17.sp, fontWeight = FontWeight.Bold)
             }
-            return true
+            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(0.dp, 6.dp, 0.dp, 20.dp)) {
+                if (post != null) item { PostCard(act, post) }
+                else item { Text("Не удалось загрузить пост", color = ic(P.textSec), fontSize = 14.sp, modifier = Modifier.padding(14.dp)) }
+            }
         }
-        override fun onFling(e1: MotionEvent?, e2: MotionEvent, vx: Float, vy: Float): Boolean {
-            if (scale > minS + 0.01f) return false
-            if (Math.abs(vx) < Math.abs(vy)) return false
-            val threshold = act.dp(60).toFloat()
-            if (Math.abs(vx) < threshold) return false
-            if (vx < 0 && idx < images.size - 1) { idx++; show(); return true }
-            if (vx > 0 && idx > 0) { idx--; show(); return true }
-            return false
-        }
-    })
-
-    img.setOnTouchListener { _, ev ->
-        sgd.onTouchEvent(ev)
-        gd.onTouchEvent(ev)
-        true
     }
-    show()
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+internal fun ViewerDialog(act: MainActivity) {
+    val images = act.viewerImages.value
+    if (images.isEmpty()) { LaunchedEffect(Unit) { act.dialog.value = null }; return }
+    val pager = rememberPagerState(initialPage = act.viewerStart.value.coerceIn(0, images.size - 1)) { images.size }
+    Dialog(onDismissRequest = { act.dialog.value = null }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Box(Modifier.fillMaxSize().background(Color.Black)) {
+            HorizontalPager(state = pager, modifier = Modifier.fillMaxSize()) { page -> ZoomImage(images[page]) }
+            Text(
+                "${pager.currentPage + 1} / ${images.size}",
+                color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium,
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 28.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun ZoomImage(b64: String) {
+    val ctx = LocalContext.current
+    val req = maxOf(ctx.resources.displayMetrics.widthPixels, ctx.resources.displayMetrics.heightPixels)
+    var bmp by remember(b64) { mutableStateOf(decodeScaled(b64, req)) }
+    if (bmp == null) LaunchedEffect(b64) { bmp = decodeScaled(b64, req) }
+    var scale by remember(b64) { mutableStateOf(1f) }
+    var panX by remember(b64) { mutableStateOf(0f) }
+    var panY by remember(b64) { mutableStateOf(0f) }
+    val shown = bmp
+    Box(
+        Modifier.fillMaxSize().pointerInput(b64) {
+            detectTransformGestures { _, pan, zoom, _ ->
+                scale = (scale * zoom).coerceIn(1f, 4f)
+                panX += pan.x; panY += pan.y
+            }
+        },
+        contentAlignment = Alignment.Center
+    ) {
+        if (shown != null) Image(
+            bitmap = shown.asImageBitmap(), contentDescription = null, contentScale = ContentScale.Fit,
+            modifier = Modifier.fillMaxSize().graphicsLayer { scaleX = scale; scaleY = scale; translationX = panX; translationY = panY }
+        )
+    }
+}
+
+private fun pickImages(act: MainActivity) {
+    val intent = android.content.Intent(android.content.Intent.ACTION_GET_CONTENT)
+    intent.type = "image/*"
+    intent.putExtra(android.content.Intent.EXTRA_ALLOW_MULTIPLE, true)
+    act.startActivityForResult(android.content.Intent.createChooser(intent, "Выбери фото"), act.PICK_IMAGES)
+}
+
+@Composable
+private fun AuthForm(act: MainActivity) {
+    val email by act.emailInput
+    val nick by act.nickInput
+    val pass by act.passInput
+    val status by act.feedStatus
+    Column(Modifier.fillMaxSize().background(ic(P.bg)).padding(24.dp, 48.dp, 24.dp, 0.dp)) {
+        Text("Ahem", color = ic(P.text), fontSize = 34.sp, fontWeight = FontWeight.Bold)
+        Text("social", color = ic(P.textSec), fontSize = 13.sp, modifier = Modifier.padding(bottom = 32.dp))
+        AuthField(email, "Email") { act.emailInput.value = it }
+        Spacer(Modifier.height(10.dp))
+        AuthField(nick, "Ник (мин. 5 символов)") { act.nickInput.value = it }
+        Spacer(Modifier.height(10.dp))
+        AuthField(pass, "Пароль") { act.passInput.value = it }
+        Spacer(Modifier.height(16.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            AccentButton("Регистрация", Modifier.weight(1f)) { doRegister(act) }
+            OutlineButton("Вход", Modifier.weight(1f)) { doLogin(act) }
+        }
+        Spacer(Modifier.height(12.dp))
+        Text(status, color = ic(P.textSec), fontSize = 13.sp)
+    }
+}
+
+@Composable
+private fun AuthField(value: String, hint: String, onChange: (String) -> Unit) {
+    Box(
+        Modifier.fillMaxWidth().background(ic(P.fieldBg), RoundedCornerShape(14.dp))
+            .border(1.dp, ic(P.border), RoundedCornerShape(14.dp)).padding(16.dp, 13.dp)
+    ) {
+        BasicTextField(
+            value = value, onValueChange = onChange, singleLine = true,
+            textStyle = TextStyle(color = ic(P.text), fontSize = 15.sp),
+            modifier = Modifier.fillMaxWidth(),
+            decorationBox = { inner -> if (value.isEmpty()) Text(hint, color = ic(P.textSec), fontSize = 15.sp); inner() }
+        )
+    }
+}
+
+private fun doRegister(act: MainActivity) {
+    if (act.isRegistering) return
+    val email = act.emailInput.value.trim()
+    val nick = act.nickInput.value.trim()
+    val pass = act.passInput.value
+    if (email.isEmpty() || nick.isEmpty() || pass.isEmpty()) { act.feedStatus.value = "Заполни все поля"; return }
+    if (nick.length < 5) { act.feedStatus.value = "Ник минимум 5 символов"; return }
+    act.isRegistering = true
+    isNickTaken(act, nick, "") { taken ->
+        if (taken) { act.feedStatus.value = "Ник уже занят"; act.isRegistering = false; return@isNickTaken }
+        act.auth.createUserWithEmailAndPassword(email, pass).addOnCompleteListener { task ->
+            act.isRegistering = false
+            if (task.isSuccessful) {
+                val userId = act.auth.currentUser?.uid ?: return@addOnCompleteListener
+                act.database.child("users").child(userId).child("email").setValue(email)
+                act.database.child("users").child(userId).child("nick").setValue(nick)
+                act.currentUserId = userId; act.currentNick = nick; act.currentEmail = email; act.viewingUserId = userId
+                saveAccount(act, userId, nick, email, pass)
+                act.saveSessionPrefs()
+                enterFeedMode(act)
+                loadMyFollowing(act) {}
+            } else {
+                act.feedStatus.value = authErrorText(task.exception)
+            }
+        }
+    }
+}
+
+private fun doLogin(act: MainActivity) {
+    if (act.isLoggingIn) return
+    val email = act.emailInput.value.trim()
+    val pass = act.passInput.value
+    if (email.isEmpty() || pass.isEmpty()) { act.feedStatus.value = "Email + пароль"; return }
+    act.isLoggingIn = true
+    act.auth.signInWithEmailAndPassword(email, pass).addOnCompleteListener { task ->
+        act.isLoggingIn = false
+        if (task.isSuccessful) {
+            val userId = act.auth.currentUser?.uid ?: return@addOnCompleteListener
+            act.currentUserId = userId; act.currentEmail = email; act.viewingUserId = userId
+            enterFeedMode(act)
+            loadMyFollowing(act) {}
+            act.database.child("users").child(userId).addListenerForSingleValueEvent(object : ValueEventListener {
+                override fun onDataChange(s: DataSnapshot) {
+                    act.currentNick = s.child("nick").getValue(String::class.java) ?: "Аноним"
+                    act.currentAvatar = s.child("avatar").getValue(String::class.java) ?: ""
+                    saveAccount(act, userId, act.currentNick, email, pass)
+                    act.saveSessionPrefs()
+                }
+                override fun onCancelled(e: DatabaseError) { dbDenied(act, e) }
+            })
+        } else {
+            act.feedStatus.value = authErrorText(task.exception)
+        }
+    }
 }
