@@ -58,7 +58,17 @@ internal val fontUnbounded = FontFamily(Font(R.font.unbounded))
 internal val fontUbuntuMed = FontFamily(Font(R.font.ubuntu_medium))
 internal val fontUbuntuReg = FontFamily(Font(R.font.ubuntu_regular))
 
-// декод base64->Bitmap уведен с главного потока (чинит лаг скролла и «нет фото в сетке»)
+internal fun putAvatar(act: MainActivity, uid: String, v: String) {
+    if (uid.isEmpty()) return
+    val m = HashMap(act.avatarCache.value); m[uid] = v; act.avatarCache.value = m
+}
+internal fun putAvatars(act: MainActivity, pairs: Map<String, String>) {
+    if (pairs.isEmpty()) return
+    val m = HashMap(act.avatarCache.value); m.putAll(pairs); act.avatarCache.value = m
+}
+internal fun avatarOf(act: MainActivity?, uid: String): String = act?.avatarCache?.value?.get(uid) ?: ""
+internal fun hasAvatar(act: MainActivity, uid: String): Boolean = act.avatarCache.value.containsKey(uid)
+
 @Composable
 internal fun rememberDecoded(b64: String, px: Int): Bitmap? {
     var bmp by remember(b64, px) { mutableStateOf<Bitmap?>(null) }
@@ -93,29 +103,35 @@ internal fun avatarBitmapC(nick: String, px: Int): Bitmap {
     return bmp
 }
 
+// круглая форма через clip(CircleShape); БЕЗ makeCircularBitmap -> нет аллокаций на кадр скролла
 @Composable
 internal fun Avatar(b64: String, nick: String, size: Dp) {
     val ctx = LocalContext.current
     val px = (size.value * ctx.resources.displayMetrics.density).toInt().coerceAtLeast(2)
     val raw = rememberDecoded(b64, px)
-    val shown = raw?.let { makeCircularBitmap(it, px) } ?: avatarBitmapC(nick, px)
-    Image(bitmap = shown.asImageBitmap(), contentDescription = null, modifier = Modifier.size(size).clip(CircleShape))
+    if (raw != null) {
+        Image(bitmap = raw.asImageBitmap(), contentDescription = null, modifier = Modifier.size(size).clip(CircleShape))
+    } else {
+        Image(bitmap = avatarBitmapC(nick, px).asImageBitmap(), contentDescription = null, modifier = Modifier.size(size).clip(CircleShape))
+    }
 }
 
+// читает snapshot-кэш каждый composition -> любая запись в кэш обновляет аватар сразу везде
 @Composable
 internal fun AuthorAvatar(uid: String, nickFallback: String, size: Dp) {
     val ctx = LocalContext.current
     val act = ctx as? MainActivity
-    val px = (size.value * ctx.resources.displayMetrics.density).toInt().coerceAtLeast(2)
-    var b64 by remember(uid) { mutableStateOf("") }
+    val cached = avatarOf(act, uid)
     LaunchedEffect(uid) {
         if (act == null || uid.isEmpty()) return@LaunchedEffect
+        if (hasAvatar(act, uid)) return@LaunchedEffect
         try {
             val s = awaitOnce(act.database.child("users").child(uid).child("avatar"))
-            b64 = s.getValue(String::class.java) ?: ""
+            val str = s.getValue(String::class.java) ?: ""
+            putAvatar(act, uid, str)
         } catch (t: Throwable) {}
     }
-    Avatar(b64, nickFallback, size)
+    Avatar(cached, nickFallback, size)
 }
 
 @Composable
