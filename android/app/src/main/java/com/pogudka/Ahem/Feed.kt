@@ -130,7 +130,7 @@ internal fun FeedScreen(act: MainActivity) {
             AuthForm(act)
         } else {
             Row(Modifier.fillMaxWidth().padding(18.dp, 14.dp, 18.dp, 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("Ahem", color = ic(P.text), fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                Text("Ahem", color = ic(P.text), fontSize = 20.sp, fontWeight = FontWeight.Bold, fontFamily = fontUnbounded)
             }
             Composer(act)
             SearchRow(act)
@@ -178,7 +178,7 @@ private fun SearchRow(act: MainActivity) {
         ) {
             BasicTextField(
                 value = q, onValueChange = { act.feedQuery.value = it }, singleLine = true,
-                textStyle = TextStyle(color = ic(P.text), fontSize = 15.sp),
+                textStyle = TextStyle(color = ic(P.text), fontSize = 15.sp, fontFamily = fontUbuntuReg),
                 modifier = Modifier.fillMaxWidth(),
                 decorationBox = { inner -> if (q.isEmpty()) Text("Поиск: текст или @ник", color = ic(P.textSec), fontSize = 15.sp); inner() }
             )
@@ -199,7 +199,7 @@ private fun Composer(act: MainActivity) {
         ) {
             BasicTextField(
                 value = txt.value, onValueChange = { txt.value = it },
-                textStyle = TextStyle(color = ic(P.text), fontSize = 15.sp),
+                textStyle = TextStyle(color = ic(P.text), fontSize = 15.sp, fontFamily = fontUbuntuReg),
                 modifier = Modifier.fillMaxWidth(),
                 decorationBox = { inner -> if (txt.value.isEmpty()) Text("Подпись к посту (до 4 фото)", color = ic(P.textSec), fontSize = 15.sp); inner() }
             )
@@ -257,7 +257,8 @@ internal fun PostCard(act: MainActivity, post: DataSnapshot) {
     val authorNick = post.child("authorNick").getValue(String::class.java) ?: "?"
     val text = post.child("text").getValue(String::class.java) ?: ""
     val ts = getTs(post)
-    val stats = act.statsMap[postId]
+    val ver by act.statsVer
+    val stats = remember(postId, ver) { act.statsMap[postId] }
     val likeCount = (stats?.child("likes")?.value as? Number)?.toLong() ?: 0L
     val viewCount = (stats?.child("views")?.value as? Number)?.toLong() ?: 0L
     val liked = stats?.child("likedBy")?.child(act.currentUserId)?.value != null
@@ -271,13 +272,13 @@ internal fun PostCard(act: MainActivity, post: DataSnapshot) {
                 Text(timeStr, color = ic(P.textSec), fontSize = 12.sp)
             }
         }
-        if (text.isNotEmpty()) Text(text, color = ic(P.text), fontSize = 15.sp, modifier = Modifier.fillMaxWidth().padding(14.dp, 0.dp, 14.dp, 12.dp))
+        if (text.isNotEmpty()) LinkText(text, color = ic(P.text), fontSize = 15.sp, modifier = Modifier.fillMaxWidth().padding(14.dp, 0.dp, 14.dp, 12.dp))
         MediaBlock(act, postId)
         Row(Modifier.fillMaxWidth().padding(14.dp, 4.dp, 14.dp, 12.dp), verticalAlignment = Alignment.CenterVertically) {
             Row(Modifier.clickable { toggleLike(act, postId) }, verticalAlignment = Alignment.CenterVertically) {
                 Icon(painter = painterResource(if (liked) R.drawable.ic_heart else R.drawable.ic_heart_outline), contentDescription = null, tint = if (liked) ic(P.heartOn) else ic(P.textSec), modifier = Modifier.size(22.dp))
                 Spacer(Modifier.width(6.dp))
-                Text("♥ " + fmtNum(likeCount), color = ic(P.text), fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                Text(fmtNum(likeCount), color = ic(P.text), fontSize = 14.sp, fontWeight = FontWeight.Medium)
             }
             Spacer(Modifier.width(16.dp))
             Icon(painter = painterResource(R.drawable.ic_eye), contentDescription = null, tint = ic(P.textSec), modifier = Modifier.size(20.dp))
@@ -370,7 +371,7 @@ internal fun PostDetailDialog(act: MainActivity, postId: String) {
             Row(Modifier.fillMaxWidth().padding(8.dp, 10.dp, 14.dp, 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 GlassIconButton(R.drawable.ic_back) { act.dialog.value = null }
                 Spacer(Modifier.width(12.dp))
-                Text("Пост", color = ic(P.text), fontSize = 17.sp, fontWeight = FontWeight.Bold)
+                Text("Пост", color = ic(P.text), fontSize = 17.sp, fontWeight = FontWeight.Bold, fontFamily = fontUnbounded)
             }
             LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(0.dp, 6.dp, 0.dp, 20.dp)) {
                 if (post != null) item { PostCard(act, post) }
@@ -433,7 +434,7 @@ private fun AuthForm(act: MainActivity) {
     val pass by act.passInput
     val status by act.feedStatus
     Column(Modifier.fillMaxSize().background(ic(P.bg)).padding(24.dp, 48.dp, 24.dp, 0.dp)) {
-        Text("Ahem", color = ic(P.text), fontSize = 34.sp, fontWeight = FontWeight.Bold)
+        Text("Ahem", color = ic(P.text), fontSize = 34.sp, fontWeight = FontWeight.Bold, fontFamily = fontUnbounded)
         Text("social", color = ic(P.textSec), fontSize = 13.sp, modifier = Modifier.padding(bottom = 32.dp))
         AuthField(email, "Email") { act.emailInput.value = it }
         Spacer(Modifier.height(10.dp))
@@ -458,7 +459,7 @@ private fun AuthField(value: String, hint: String, onChange: (String) -> Unit) {
     ) {
         BasicTextField(
             value = value, onValueChange = onChange, singleLine = true,
-            textStyle = TextStyle(color = ic(P.text), fontSize = 15.sp),
+            textStyle = TextStyle(color = ic(P.text), fontSize = 15.sp, fontFamily = fontUbuntuReg),
             modifier = Modifier.fillMaxWidth(),
             decorationBox = { inner -> if (value.isEmpty()) Text(hint, color = ic(P.textSec), fontSize = 15.sp); inner() }
         )
