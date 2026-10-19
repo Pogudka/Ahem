@@ -110,7 +110,7 @@ private fun ConversationList(act: MainActivity) {
     val status by act.chatStatus
     Column(Modifier.fillMaxSize().background(ic(P.bg))) {
         Row(Modifier.fillMaxWidth().padding(18.dp, 14.dp, 18.dp, 10.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("Сообщения", color = ic(P.text), fontSize = 22.sp, fontWeight = FontWeight.Bold)
+            Text("Сообщения", color = ic(P.text), fontSize = 22.sp, fontWeight = FontWeight.Bold, fontFamily = fontUnbounded)
         }
         if (status.isNotEmpty()) Text(status, color = ic(P.textSec), fontSize = 13.sp, modifier = Modifier.padding(18.dp, 0.dp, 18.dp, 6.dp))
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(14.dp, 0.dp, 14.dp, 96.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -152,14 +152,14 @@ private fun Conversation(act: MainActivity, peerUid: String, peerNick: String) {
         Row(Modifier.fillMaxWidth().padding(8.dp, 12.dp, 14.dp, 10.dp), verticalAlignment = Alignment.CenterVertically) {
             GlassIconButton(R.drawable.ic_back) { closeConversation(act) }
             Spacer(Modifier.width(12.dp))
-            Text("@$peerNick", color = ic(P.text), fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            Text("@$peerNick", color = ic(P.text), fontSize = 18.sp, fontWeight = FontWeight.Bold, fontFamily = fontUnbounded)
         }
         LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = listState, contentPadding = PaddingValues(14.dp, 6.dp, 14.dp, 8.dp), verticalArrangement = Arrangement.Bottom) {
             items(msgs) { m -> Bubble(m) }
         }
-        Row(Modifier.fillMaxWidth().padding(14.dp, 0.dp, 14.dp, 12.dp).background(ic(P.surface), RoundedCornerShape(26.dp)).border(1.dp, ic(P.border), RoundedCornerShape(26.dp)).padding(8.dp, 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().padding(14.dp, 0.dp, 14.dp, 96.dp).background(ic(P.surface), RoundedCornerShape(26.dp)).border(1.dp, ic(P.border), RoundedCornerShape(26.dp)).padding(8.dp, 6.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.weight(1f).padding(12.dp, 10.dp)) {
-                BasicTextField(value = input.value, onValueChange = { input.value = it }, textStyle = TextStyle(color = ic(P.text), fontSize = 15.sp), modifier = Modifier.fillMaxWidth(), decorationBox = { inner -> if (input.value.isEmpty()) Text("Сообщение...", color = ic(P.textSec), fontSize = 15.sp); inner() })
+                BasicTextField(value = input.value, onValueChange = { input.value = it }, textStyle = TextStyle(color = ic(P.text), fontSize = 15.sp, fontFamily = fontUbuntuReg), modifier = Modifier.fillMaxWidth(), decorationBox = { inner -> if (input.value.isEmpty()) Text("Сообщение...", color = ic(P.textSec), fontSize = 15.sp); inner() })
             }
             Box(Modifier.clickable { sendMsg(act, peerUid, input.value); input.value = "" }, contentAlignment = Alignment.Center) {
                 Icon(painter = painterResource(R.drawable.ic_send), contentDescription = null, tint = ic(P.text), modifier = Modifier.padding(8.dp))
@@ -173,7 +173,7 @@ private fun Bubble(m: Msg) {
     val df = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
     Row(Modifier.fillMaxWidth().padding(bottom = 6.dp), horizontalArrangement = if (m.mine) Arrangement.End else Arrangement.Start) {
         Column(Modifier.background(if (m.mine) ic(P.accent) else ic(P.surface), RoundedCornerShape(18.dp)).border(1.dp, if (m.mine) Color.Transparent else ic(P.border), RoundedCornerShape(18.dp)).padding(14.dp, 10.dp, 14.dp, 8.dp)) {
-            Text(m.text, color = if (m.mine) ic(P.accentText) else ic(P.text), fontSize = 15.sp)
+            Text(m.text, color = if (m.mine) ic(P.accentText) else ic(P.text), fontSize = 15.sp, fontFamily = fontUbuntuReg)
             if (m.ts > 0) Text(df.format(Date(m.ts)), color = if (m.mine) Color(1f,1f,1f,0.6f) else ic(P.textSec), fontSize = 10.sp, modifier = Modifier.align(if (m.mine) Alignment.End else Alignment.Start))
         }
     }
@@ -199,11 +199,9 @@ internal fun sendMsg(act: MainActivity, peer: String, raw: String) {
     payload["text"] = text; payload["message"] = text; payload["body"] = text
     payload["ts"] = now; payload["timestamp"] = now; payload["createdAt"] = now
     payload["senderUid"] = me; payload["uid"] = me; payload["from"] = me; payload["nick"] = act.currentNick
-    // своя копия: conversations/<me>/<peer>/<key>
     val outRef = act.database.child("conversations").child(me).child(peer)
     val outKey = outRef.push().key
     if (outKey != null) { val m = HashMap(payload); m["mine"] = true; outRef.child(outKey).setValue(m) }
-    // копия собеседника: conversations/<peer>/<me>/<key>  (разрешена правилами: auth===$peer-переменной && newData.exists())
     val inRef = act.database.child("conversations").child(peer).child(me)
     val inKey = inRef.push().key
     if (inKey != null) { val m = HashMap(payload); m["mine"] = false; inRef.child(inKey).setValue(m) }
