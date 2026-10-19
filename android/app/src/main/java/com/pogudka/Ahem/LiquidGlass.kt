@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.Rect
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.view.Window
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -20,7 +21,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
@@ -88,27 +88,39 @@ fun LiquidGlass(
         val w = window ?: return@LaunchedEffect
         if (!PixelCopyRef.available) return@LaunchedEffect
         if (sz.width <= 0 || sz.height <= 0) return@LaunchedEffect
-        capturing = true
-        delay(40)
-        val rect = Rect(loc.x.toInt(), loc.y.toInt(), loc.x.toInt() + sz.width, loc.y.toInt() + sz.height)
-        val cap = try { Bitmap.createBitmap(sz.width, sz.height, Bitmap.Config.ARGB_8888) } catch (t: Throwable) { capturing = false; return@LaunchedEffect }
-        val ok = PixelCopyRef.request(w, rect, cap, { res ->
-            val out = if (res == 0) cpuBlur(cap, sz.width, sz.height, blur) else null
-            cap.recycle(); bg = out; capturing = false
-        }, Handler(Looper.getMainLooper()))
-        if (!ok) { cap.recycle(); capturing = false }
+        var tries = 0
+        while (tries < 6) {
+            tries++
+            capturing = true
+            delay(60)
+            val rect = Rect(loc.x.toInt(), loc.y.toInt(), loc.x.toInt() + sz.width, loc.y.toInt() + sz.height)
+            val cap = try { Bitmap.createBitmap(sz.width, sz.height, Bitmap.Config.ARGB_8888) } catch (t: Throwable) { capturing = false; break }
+            var done = false
+            var code = -1
+            val ok = PixelCopyRef.request(w, rect, cap, { res ->
+                code = res
+                val out = if (res == 0) cpuBlur(cap, sz.width, sz.height, blur) else null
+                cap.recycle()
+                if (out != null) bg = out
+                done = true
+                capturing = false
+            }, Handler(Looper.getMainLooper()))
+            if (!ok) { cap.recycle(); capturing = false; break }
+            // ждём колбэк этого захвата
+            var wait = 0
+            while (!done && wait < 30) { delay(16); wait++ }
+            if (code == 0) break
+            Log.w("AhemGlass", "PixelCopy res=$code try=$tries")
+        }
     }
 
-    Box(
-        modifier = modifier
-            .alpha(if (capturing) 0f else 1f)
-            .clip(shape)
-            .border(1.dp, border, shape)
-    ) {
-        val b = bg
-        if (b != null) Image(bitmap = b.asImageBitmap(), contentDescription = null, modifier = Modifier.fillMaxSize())
-        Box(Modifier.fillMaxSize().background(tint))
-        Box(Modifier.fillMaxSize().background(Brush.linearGradient(listOf(Color(1f,1f,1f,0.35f), Color(1f,1f,1f,0f), Color(1f,1f,1f,0.08f)))))
+    Box(modifier = modifier.clip(shape).border(1.dp, border, shape)) {
+        if (!capturing) {
+            val b = bg
+            if (b != null) Image(bitmap = b.asImageBitmap(), contentDescription = null, modifier = Modifier.fillMaxSize())
+            Box(Modifier.fillMaxSize().background(tint))
+            Box(Modifier.fillMaxSize().background(Brush.linearGradient(listOf(Color(1f,1f,1f,0.35f), Color(1f,1f,1f,0f), Color(1f,1f,1f,0.08f)))))
+        }
         Box(Modifier.fillMaxSize(), content = content)
     }
 }
