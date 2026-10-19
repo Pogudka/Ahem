@@ -49,12 +49,25 @@ import androidx.compose.ui.unit.sp
 import com.google.firebase.database.DataSnapshot
 import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.ValueEventListener
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
 
 internal val fontUnbounded = FontFamily(Font(R.font.unbounded))
 internal val fontUbuntuMed = FontFamily(Font(R.font.ubuntu_medium))
 internal val fontUbuntuReg = FontFamily(Font(R.font.ubuntu_regular))
+
+// декод base64->Bitmap уведен с главного потока (чинит лаг скролла и «нет фото в сетке»)
+@Composable
+internal fun rememberDecoded(b64: String, px: Int): Bitmap? {
+    var bmp by remember(b64, px) { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(b64, px) {
+        if (b64.isEmpty()) { bmp = null; return@LaunchedEffect }
+        bmp = withContext(Dispatchers.Default) { decodeScaled(b64, px) }
+    }
+    return bmp
+}
 
 internal suspend fun awaitOnce(ref: com.google.firebase.database.DatabaseReference): DataSnapshot =
     suspendCancellableCoroutine { cont ->
@@ -84,9 +97,8 @@ internal fun avatarBitmapC(nick: String, px: Int): Bitmap {
 internal fun Avatar(b64: String, nick: String, size: Dp) {
     val ctx = LocalContext.current
     val px = (size.value * ctx.resources.displayMetrics.density).toInt().coerceAtLeast(2)
-    var bmp by remember(b64, nick, px) { mutableStateOf<Bitmap?>(if (b64.isNotEmpty()) decodeScaled(b64, px) else null) }
-    if (bmp == null && b64.isNotEmpty()) LaunchedEffect(b64, px) { bmp = decodeScaled(b64, px) }
-    val shown = bmp?.let { makeCircularBitmap(it, px) } ?: avatarBitmapC(nick, px)
+    val raw = rememberDecoded(b64, px)
+    val shown = raw?.let { makeCircularBitmap(it, px) } ?: avatarBitmapC(nick, px)
     Image(bitmap = shown.asImageBitmap(), contentDescription = null, modifier = Modifier.size(size).clip(CircleShape))
 }
 
@@ -95,17 +107,15 @@ internal fun AuthorAvatar(uid: String, nickFallback: String, size: Dp) {
     val ctx = LocalContext.current
     val act = ctx as? MainActivity
     val px = (size.value * ctx.resources.displayMetrics.density).toInt().coerceAtLeast(2)
-    var bmp by remember(uid, px) { mutableStateOf<Bitmap?>(null) }
-    LaunchedEffect(uid, px) {
+    var b64 by remember(uid) { mutableStateOf("") }
+    LaunchedEffect(uid) {
         if (act == null || uid.isEmpty()) return@LaunchedEffect
         try {
             val s = awaitOnce(act.database.child("users").child(uid).child("avatar"))
-            val str = s.getValue(String::class.java) ?: ""
-            if (str.isNotEmpty()) bmp = decodeScaled(str, px)
+            b64 = s.getValue(String::class.java) ?: ""
         } catch (t: Throwable) {}
     }
-    val shown = bmp?.let { makeCircularBitmap(it, px) } ?: avatarBitmapC(nickFallback, px)
-    Image(bitmap = shown.asImageBitmap(), contentDescription = null, modifier = Modifier.size(size).clip(CircleShape))
+    Avatar(b64, nickFallback, size)
 }
 
 @Composable
