@@ -71,10 +71,9 @@ private object PixelCopyRef {
 fun LiquidGlass(
     modifier: Modifier = Modifier,
     corner: Dp = 28.dp,
-    tint: Color = ic(P.navGlass),
+    tint: Color = Color(0x66FFFFFF),
     border: Color = ic(P.border),
-    blur: Int = 40,
-    tick: Any? = null,
+    blur: Int = 60,
     content: @Composable BoxScope.() -> Unit
 ) {
     val activity = LocalContext.current as? Activity
@@ -85,16 +84,17 @@ fun LiquidGlass(
     var capturing by remember { mutableStateOf(false) }
     val shape = RoundedCornerShape(corner)
 
-    LaunchedEffect(loc, sz, tick) {
+    // захват ТОЛЬКО по размеру/позиции (без tick) -> смена таба не переснимает -> нет мерцания
+    LaunchedEffect(loc, sz) {
         val w = window ?: return@LaunchedEffect
         val act = activity ?: return@LaunchedEffect
         if (sz.width <= 0 || sz.height <= 0) return@LaunchedEffect
         capturing = true
-        delay(120)
+        delay(80)
         var got: Bitmap? = null
         if (PixelCopyRef.available) {
             var tries = 0
-            while (tries < 4 && got == null) {
+            while (tries < 3 && got == null) {
                 tries++
                 val rect = Rect(loc.x.toInt(), loc.y.toInt(), loc.x.toInt() + sz.width, loc.y.toInt() + sz.height)
                 val cap = try { Bitmap.createBitmap(sz.width, sz.height, Bitmap.Config.ARGB_8888) } catch (t: Throwable) { break }
@@ -134,6 +134,8 @@ fun LiquidGlass(
         capturing = false
     }
 
+    // рамка + иконки + тон живут ВСЕГДА (не мерцают); на время кадра скрывается только слой мыла,
+    // чтобы не размывать собственное стекло (иначе/opaque и дрейф плотности)
     Box(
         modifier = modifier
             .onGloballyPositioned { c -> loc = c.positionInWindow(); sz = c.size }
@@ -143,15 +145,15 @@ fun LiquidGlass(
         if (!capturing) {
             val b = bg
             if (b != null) Image(bitmap = b.asImageBitmap(), contentDescription = null, modifier = Modifier.fillMaxSize())
-            Box(Modifier.fillMaxSize().background(tint))
-            Box(Modifier.fillMaxSize().background(Brush.linearGradient(listOf(Color(1f, 1f, 1f, 0.35f), Color(1f, 1f, 1f, 0f), Color(1f, 1f, 1f, 0.08f)))))
-            Box(Modifier.fillMaxSize(), content = content)
         }
+        Box(Modifier.fillMaxSize().background(tint))
+        Box(Modifier.fillMaxSize().background(Brush.linearGradient(listOf(Color(1f, 1f, 1f, 0.22f), Color(1f, 1f, 1f, 0f), Color(1f, 1f, 1f, 0.10f)))))
+        Box(Modifier.fillMaxSize(), content = content)
     }
 }
 
 private fun cpuBlur(src: Bitmap, w: Int, h: Int, radius: Int): Bitmap {
-    val down = 8
+    val down = 6
     val tw = (w / down).coerceAtLeast(2); val th = (h / down).coerceAtLeast(2)
     val tiny = Bitmap.createScaledBitmap(src, tw, th, true)
     val pix = IntArray(tw * th); tiny.getPixels(pix, 0, tw, 0, 0, tw, th)
