@@ -4,6 +4,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -26,7 +27,7 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.ExperimentalMaterialApi
-import androidx.compose.material.pullrefresh.PullRefreshIndicator
+import androidx.compose.material.pullrefresh.PullRefreshState
 import androidx.compose.material.pullrefresh.pullRefresh
 import androidx.compose.material.pullrefresh.rememberPullRefreshState
 import androidx.compose.material3.Icon
@@ -61,6 +62,7 @@ import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.MutableData
 import com.google.firebase.database.Transaction
 import com.google.firebase.database.ValueEventListener
+import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -149,8 +151,14 @@ internal fun FeedScreen(act: MainActivity) {
     val listState = rememberLazyListState()
     val pr = rememberPullRefreshState(
         refreshing = act.refreshing.value,
-        onRefresh = { act.refreshing.value = true; loadFeed(act) { act.refreshing.value = false } }
+        onRefresh = { act.refreshing.value = true; loadFeed(act) { act.refreshing.value = false } },
+        distanceThreshold = 150.dp
     )
+    // live-сигнал стеклу: дёргаем только ПОСЛЕ остановки скролла (debounce), в движении — ни одной пересъёмки
+    LaunchedEffect(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset / 600) {
+        delay(220)
+        act.feedScrollTick.value++
+    }
     Column(Modifier.fillMaxSize().background(ic(P.bg))) {
         if (me.isEmpty()) {
             AuthForm(act)
@@ -190,15 +198,25 @@ internal fun FeedScreen(act: MainActivity) {
                     }
                     items(sorted, key = { it.key ?: "" }) { p -> PostCard(act, p) }
                 }
-                PullRefreshIndicator(
-                    refreshing = act.refreshing.value,
-                    state = pr,
-                    modifier = Modifier.align(Alignment.TopCenter),
-                    backgroundColor = ic(P.surface),
-                    contentColor = ic(P.textSec)
-                )
+                RefreshIndicator(pr, act.refreshing.value, Modifier.align(Alignment.TopCenter))
             }
         }
+    }
+}
+
+@OptIn(ExperimentalMaterialApi::class)
+@Composable
+private fun RefreshIndicator(pr: PullRefreshState, refreshing: Boolean, modifier: Modifier = Modifier) {
+    val dens = LocalDensity.current
+    val prog = pr.progress.coerceIn(0f, 1f)
+    val top = with(dens) { (prog * 56f).toDp() }
+    Box(modifier.padding(top = top + 8.dp), contentAlignment = Alignment.Center) {
+        Icon(
+            painter = painterResource(R.drawable.ic_refresh),
+            contentDescription = null,
+            tint = ic(P.textSec),
+            modifier = Modifier.size((20f + prog * 12f).dp).scale(if (refreshing) 1f else 0.6f + prog * 0.4f)
+        )
     }
 }
 
@@ -258,7 +276,11 @@ private fun Composer(act: MainActivity) {
                 post["text"] = text
                 post["timestamp"] = System.currentTimeMillis()
                 act.database.child("posts").child(postId).setValue(post)
-                if (act.pendingImages.isNotEmpty()) act.database.child("postMedia").child(postId).setValue(act.pendingImages.joinToString(","))
+                if (act.pendingImages.isNotEmpty()) {
+                    val joined = act.pendingImages.joinToString(",")
+                    act.mediaCache[postId] = joined
+                    act.database.child("postMedia").child(postId).setValue(joined)
+                }
                 val stats = HashMap<String, Any>()
                 stats["likes"] = 0; stats["views"] = 0
                 stats["likedBy"] = HashMap<String, Boolean>(); stats["viewedBy"] = HashMap<String, Boolean>()
@@ -331,11 +353,14 @@ internal fun PostCard(act: MainActivity, post: DataSnapshot) {
 
 @Composable
 private fun MediaBlock(act: MainActivity, postId: String) {
-    var str by remember(postId) { mutableStateOf<String?>(null) }
+    var str by remember(postId) { mutableStateOf<String?>(act.mediaCache[postId]) }
     LaunchedEffect(postId) {
+        if (act.mediaCache.containsKey(postId)) { str = act.mediaCache[postId]; return@LaunchedEffect }
         try {
             val s = awaitOnce(act.database.child("postMedia").child(postId))
-            str = s.getValue(String::class.java) ?: ""
+            val v = s.getValue(String::class.java) ?: ""
+            act.mediaCache[postId] = v
+            str = v
         } catch (t: Throwable) { str = "" }
     }
     val images = (str ?: "").split(",").filter { it.isNotEmpty() }
@@ -432,35 +457,35 @@ internal fun ViewerDialog(act: MainActivity) {
     }
 }
 
+// свайп 1 пальцем при scale==1 уходит HorizontalPager (листание фото); двойной тап приближает;
+// в приближённом состоянии висит pинч/пан. "Осмотр" ослаблен: max 3x, double-tap 2.2x.
 @Composable
 private fun ZoomImage(b64: String) {
     val ctx = LocalContext.current
     val req = maxOf(ctx.resources.displayMetrics.widthPixels, ctx.resources.displayMetrics.heightPixels)
     val shown = rememberDecoded(b64, req)
-    val density = LocalDensity.current
+    val dens = LocalDensity.current
     var scale by remember(b64) { mutableStateOf(1f) }
-    var panOffset by remember(b64) { mutableStateOf(Offset.Zero) }
-    Box(
-        Modifier
-            .fillMaxSize()
-            .pointerInput(b64) {
-                detectTransformGestures { _, pan, zoom, _ ->
-                    val newScale = (scale * zoom).coerceIn(1f, 4f)
-                    panOffset += pan
-                    scale = newScale
-                    if (scale <= 1.02f) { scale = 1f; panOffset = Offset.Zero }
-                }
-            },
-        contentAlignment = Alignment.Center
-    ) {
+    var pan by remember(b64) { mutableStateOf(Offset.Zero) }
+    val base = Modifier.fillMaxSize().pointerInput(b64) {
+        detectTapGestures(onDoubleTap = {
+            if (scale > 1.05f) { scale = 1f; pan = Offset.Zero } else { scale = 2.2f; pan = Offset.Zero }
+        })
+    }
+    val zoomed = if (scale > 1.05f) base.pointerInput(b64) {
+        detectTransformGestures { _, panBy, zoom, _ ->
+            val ns = (scale * zoom).coerceIn(1f, 3f)
+            pan += panBy
+            scale = ns
+            if (scale <= 1.02f) { scale = 1f; pan = Offset.Zero }
+        }
+    } else base
+    Box(zoomed, contentAlignment = Alignment.Center) {
         if (shown != null) Image(
             bitmap = shown.asImageBitmap(),
             contentDescription = null,
             contentScale = ContentScale.Fit,
-            modifier = Modifier
-                .fillMaxSize()
-                .scale(scale)
-                .offset(with(density) { panOffset.x.toDp() }, with(density) { panOffset.y.toDp() })
+            modifier = Modifier.fillMaxSize().scale(scale).offset(with(dens) { pan.x.toDp() }, with(dens) { pan.y.toDp() })
         )
     }
 }
@@ -559,6 +584,7 @@ private fun doLogin(act: MainActivity) {
                     act.currentNick = s.child("nick").getValue(String::class.java) ?: "Аноним"
                     act.currentAvatar = s.child("avatar").getValue(String::class.java) ?: ""
                     act.profAvatarB64.value = act.currentAvatar
+                    if (act.currentAvatar.isNotEmpty()) putAvatar(act, userId, act.currentAvatar)
                     saveAccount(act, userId, act.currentNick, email, pass)
                     act.saveSessionPrefs()
                 }
