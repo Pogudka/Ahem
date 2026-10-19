@@ -25,7 +25,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -47,8 +46,6 @@ import java.util.Locale
 
 internal data class Msg(val text: String, val ts: Long, val mine: Boolean)
 internal data class PeerRow(val uid: String, val nick: String, val preview: String, val avatarB64: String)
-
-internal fun chatPairKey(a: String, b: String): String = if (a <= b) "${a}_$b" else "${b}_$a"
 
 private fun msgText(m: DataSnapshot): String = try {
     var r = ""
@@ -73,8 +70,8 @@ private fun msgNick(m: DataSnapshot): String = try {
 private fun msgMine(m: DataSnapshot, myUid: String, myNick: String, def: Boolean): Boolean = try {
     var res: Boolean? = null
     for (k in arrayOf("senderUid","from","uid","sender","author","userId","owner","by")) { val v = m.child(k).getValue(String::class.java) ?: ""; if (v.isNotEmpty()) { res = (v == myUid); break } }
-    if (res == null && myNick.isNotEmpty()) { val n = msgNick(m); if (n.isNotEmpty()) res = (n == myNick) }
     if (res == null) { val v = m.child("mine").getValue(Boolean::class.java); if (v != null) res = v }
+    if (res == null && myNick.isNotEmpty()) { val n = msgNick(m); if (n.isNotEmpty()) res = (n == myNick) }
     res ?: def
 } catch (e: Exception) { def }
 
@@ -134,20 +131,18 @@ private fun ConversationList(act: MainActivity) {
 @Composable
 private fun Conversation(act: MainActivity, peerUid: String, peerNick: String) {
     val listState = rememberLazyListState()
-    DisposableEffect(peerUid, act.currentUserId) {
-        val me = act.currentUserId
-        val l1 = object : ValueEventListener { override fun onDataChange(s: DataSnapshot) { mergeMsgs(act.chatMsgs, s, act, false) }; override fun onCancelled(e: DatabaseError) {} }
-        val l2 = object : ValueEventListener { override fun onDataChange(s: DataSnapshot) { mergeMsgs(act.chatMsgs, s, act, true) }; override fun onCancelled(e: DatabaseError) {} }
-        val l3 = object : ValueEventListener { override fun onDataChange(s: DataSnapshot) { mergeMsgs(act.chatMsgs, s, act, false) }; override fun onCancelled(e: DatabaseError) {} }
-        act.database.child("conversations").child(me).child(peerUid).addValueEventListener(l1)
-        act.database.child("conversations").child(peerUid).child(me).addValueEventListener(l2)
-        act.database.child("conversations").child(peerUid).addValueEventListener(l3)
-        onDispose {
-            try {
-                act.database.child("conversations").child(me).child(peerUid).removeEventListener(l1)
-                act.database.child("conversations").child(peerUid).child(me).removeEventListener(l2)
-                act.database.child("conversations").child(peerUid).removeEventListener(l3)
-            } catch (e: Exception) {}
+    val me = act.currentUserId
+    DisposableEffect(peerUid, me) {
+        if (me.isEmpty() || peerUid.isEmpty() || peerUid == me) {
+            onDispose { }
+        } else {
+            val ref = act.database.child("conversations").child(me).child(peerUid)
+            val listener = object : ValueEventListener {
+                override fun onDataChange(s: DataSnapshot) { mergeMsgs(act.chatMsgs, s, act, false) }
+                override fun onCancelled(e: DatabaseError) { }
+            }
+            ref.addValueEventListener(listener)
+            onDispose { try { ref.removeEventListener(listener) } catch (e: Exception) {} }
         }
     }
     val msgs = act.chatMsgs.toList()
@@ -201,10 +196,17 @@ internal fun sendMsg(act: MainActivity, peer: String, raw: String) {
     val text = raw.trim(); if (text.isEmpty()) return
     val now = System.currentTimeMillis()
     val payload = HashMap<String, Any>()
-    payload["text"] = text; payload["message"] = text; payload["body"] = text; payload["ts"] = now; payload["timestamp"] = now; payload["createdAt"] = now; payload["senderUid"] = me; payload["uid"] = me; payload["from"] = me; payload["nick"] = act.currentNick
-    val ri = act.database.child("conversations").child(me).child(peer); val ki = ri.push().key; if (ki != null) { val m = HashMap(payload); m["mine"] = true; ri.child(ki).setValue(m) }
-    val rp = act.database.child("conversations").child(peer).child(me); val kp = rp.push().key; if (kp != null) { val m = HashMap(payload); m["mine"] = false; rp.child(kp).setValue(m) }
-    val rf = act.database.child("conversations").child(peer); val kf = rf.push().key; if (kf != null) { val m = HashMap(payload); m["mine"] = true; rf.child(kf).setValue(m) }
+    payload["text"] = text; payload["message"] = text; payload["body"] = text
+    payload["ts"] = now; payload["timestamp"] = now; payload["createdAt"] = now
+    payload["senderUid"] = me; payload["uid"] = me; payload["from"] = me; payload["nick"] = act.currentNick
+    // своя копия: conversations/<me>/<peer>/<key>
+    val outRef = act.database.child("conversations").child(me).child(peer)
+    val outKey = outRef.push().key
+    if (outKey != null) { val m = HashMap(payload); m["mine"] = true; outRef.child(outKey).setValue(m) }
+    // копия собеседника: conversations/<peer>/<me>/<key>  (разрешена правилами: auth===$peer-переменной && newData.exists())
+    val inRef = act.database.child("conversations").child(peer).child(me)
+    val inKey = inRef.push().key
+    if (inKey != null) { val m = HashMap(payload); m["mine"] = false; inRef.child(inKey).setValue(m) }
     savePeer(act, peer, act.chatPeerNick)
 }
 
