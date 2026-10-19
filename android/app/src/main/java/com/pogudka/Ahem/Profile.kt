@@ -87,7 +87,7 @@ private fun refreshProfileData(act: MainActivity) {
             val nick = s.child("nick").getValue(String::class.java) ?: "?"
             val av = s.child("avatar").getValue(String::class.java) ?: ""
             act.profAvatarB64.value = av
-            if (targetId == act.currentUserId) act.currentAvatar = av
+            if (targetId == act.currentUserId) { act.currentAvatar = av; if (av.isNotEmpty()) putAvatar(act, targetId, av) }
             act.profNick.value = "@$nick"
             act.profName.value = nick
             act.profBio.value = s.child("bio").getValue(String::class.java) ?: ""
@@ -134,6 +134,13 @@ internal fun ProfileScreen(act: MainActivity) {
     val me by act.sessionUid
     val target by act.profTarget
     val isMe = target.isNotEmpty() && target == me
+    val editAv by act.editAvatarB64
+    // мгновенное обновление своего аватара везде при выборе фото (ImagePick пишет editAvatarB64)
+    LaunchedEffect(editAv) {
+        if (editAv.isNotEmpty() && me.isNotEmpty()) {
+            act.profAvatarB64.value = editAv; act.currentAvatar = editAv; putAvatar(act, me, editAv)
+        }
+    }
     var mode by remember { mutableStateOf(0) }
     val grid = remember { mutableStateListOf<DataSnapshot>() }
     var postsCount by remember { mutableStateOf(0L) }
@@ -221,9 +228,10 @@ private fun GridTile(act: MainActivity, p: DataSnapshot, modifier: Modifier = Mo
     val ver by act.statsVer
     val stats = remember(postId, ver) { act.statsMap[postId] }
     val liked = act.optLiked[postId] ?: (stats?.child("likedBy")?.child(act.currentUserId)?.value != null)
-    var media by remember(postId, ver) { mutableStateOf<String?>(null) }
+    var media by remember(postId) { mutableStateOf<String?>(act.mediaCache[postId]) }
     LaunchedEffect(postId) {
-        try { val s = awaitOnce(act.database.child("postMedia").child(postId)); media = s.getValue(String::class.java) ?: "" } catch (t: Throwable) { media = "" }
+        if (act.mediaCache.containsKey(postId)) { media = act.mediaCache[postId]; return@LaunchedEffect }
+        try { val s = awaitOnce(act.database.child("postMedia").child(postId)); val v = s.getValue(String::class.java) ?: ""; act.mediaCache[postId] = v; media = v } catch (t: Throwable) { media = "" }
     }
     val first = (media ?: "").split(",").firstOrNull { it.isNotEmpty() } ?: ""
     val shown = rememberDecoded(first, 360)
@@ -355,7 +363,6 @@ private fun EditDialog(act: MainActivity) {
             }
             Spacer(Modifier.height(16.dp))
             Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-                // читает состояние -> после выбора фото обновляется сразу, без гонки profileGen
                 Avatar(act.editAvatarB64.value.ifEmpty { act.currentAvatar }, act.currentNick, 96.dp)
                 Spacer(Modifier.height(12.dp))
                 OutlineButton("Сменить аватар", Modifier.fillMaxWidth()) {
@@ -419,11 +426,22 @@ private fun FollowListDialog(act: MainActivity, followers: Boolean) {
             override fun onDataChange(s: DataSnapshot) {
                 items.clear()
                 title.value = (if (followers) "Подписчики " else "Подписки ") + s.children.count()
+                val uids = ArrayList<String>()
                 for (c in s.children) {
                     val uid = c.key ?: continue
                     val nick = c.child("nick").getValue(String::class.java) ?: "?"
-                    items.add(Pair(uid, nick))
+                    items.add(Pair(uid, nick)); uids.add(uid)
                 }
+                // prefetch аватаров в snapshot-кэш одним чтением users -> первый показ без пустых кружков
+                val need = uids.filter { !hasAvatar(act, it) }
+                if (need.isNotEmpty()) act.database.child("users").addListenerForSingleValueEvent(object : ValueEventListener {
+                    override fun onDataChange(us: DataSnapshot) {
+                        val pairs = HashMap<String, String>()
+                        for (u in us.children) { val id = u.key ?: continue; if (id in need) { val av = u.child("avatar").getValue(String::class.java) ?: ""; if (av.isNotEmpty()) pairs[id] = av } }
+                        putAvatars(act, pairs)
+                    }
+                    override fun onCancelled(e: DatabaseError) {}
+                })
             }
             override fun onCancelled(e: DatabaseError) {}
         })
@@ -472,6 +490,7 @@ internal fun switchToAccount(act: MainActivity, acc: Acc) {
                     act.currentNick = s.child("nick").getValue(String::class.java) ?: acc.nick
                     act.currentAvatar = s.child("avatar").getValue(String::class.java) ?: ""
                     act.profAvatarB64.value = act.currentAvatar
+                    if (act.currentAvatar.isNotEmpty()) putAvatar(act, uid, act.currentAvatar)
                     act.saveSessionPrefs()
                     refreshProfile(act)
                 }
