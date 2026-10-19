@@ -4,8 +4,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.rememberTransformableState
-import androidx.compose.foundation.gestures.transformable
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -40,9 +40,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -434,14 +436,37 @@ private fun ZoomImage(b64: String) {
     val ctx = LocalContext.current
     val req = maxOf(ctx.resources.displayMetrics.widthPixels, ctx.resources.displayMetrics.heightPixels)
     val shown = rememberDecoded(b64, req)
-    val tm = rememberTransformableState { zoomChange, panChange, rotationChange -> }
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+    var scale by remember(b64) { mutableStateOf(1f) }
+    var panOffset by remember(b64) { mutableStateOf(Offset.Zero) }
+    Box(
+        Modifier
+            .fillMaxSize()
+            .pointerInput(b64) {
+                detectTransformGestures { centroid, pan, zoom, _ ->
+                    val old = scale
+                    val newScale = (old * zoom).coerceIn(1f, 4f)
+                    panOffset += pan
+                    if (old > 0f && newScale != old) {
+                        val ratio = newScale / old
+                        panOffset += (centroid - panOffset) * (1f - ratio)
+                    }
+                    scale = newScale
+                    if (scale <= 1.02f) {
+                        scale = 1f
+                        panOffset = Offset.Zero
+                    }
+                }
+            },
+        contentAlignment = Alignment.Center
+    ) {
         if (shown != null) Image(
-            bitmap = shown.asImageBitmap(), contentDescription = null, contentScale = ContentScale.Fit,
-            modifier = Modifier.fillMaxSize().transformable(tm).graphicsLayer {
-                scaleX = tm.zoom; scaleY = tm.zoom
-                translationX = tm.pan.x; translationY = tm.pan.y
-            }
+            bitmap = shown.asImageBitmap(),
+            contentDescription = null,
+            contentScale = ContentScale.Fit,
+            modifier = Modifier
+                .fillMaxSize()
+                .scale(scale)
+                .offset(panOffset.x.toInt(), panOffset.y.toInt())
         )
     }
 }
