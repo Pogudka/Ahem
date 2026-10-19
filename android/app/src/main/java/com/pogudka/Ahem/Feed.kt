@@ -152,9 +152,8 @@ internal fun FeedScreen(act: MainActivity) {
     val pr = rememberPullRefreshState(
         refreshing = act.refreshing.value,
         onRefresh = { act.refreshing.value = true; loadFeed(act) { act.refreshing.value = false } },
-        distanceThreshold = 150.dp
+        refreshThreshold = 150.dp
     )
-    // live-сигнал стеклу: дёргаем только ПОСЛЕ остановки скролла (debounce), в движении — ни одной пересъёмки
     LaunchedEffect(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset / 600) {
         delay(220)
         act.feedScrollTick.value++
@@ -457,8 +456,6 @@ internal fun ViewerDialog(act: MainActivity) {
     }
 }
 
-// свайп 1 пальцем при scale==1 уходит HorizontalPager (листание фото); двойной тап приближает;
-// в приближённом состоянии висит pинч/пан. "Осмотр" ослаблен: max 3x, double-tap 2.2x.
 @Composable
 private fun ZoomImage(b64: String) {
     val ctx = LocalContext.current
