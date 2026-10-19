@@ -48,6 +48,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.google.firebase.database.DataSnapshot
 import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.ValueEventListener
@@ -84,7 +85,9 @@ private fun refreshProfileData(act: MainActivity) {
         override fun onDataChange(s: DataSnapshot) {
             if (gen != act.profileGen) return
             val nick = s.child("nick").getValue(String::class.java) ?: "?"
-            act.profAvatarB64.value = s.child("avatar").getValue(String::class.java) ?: ""
+            val av = s.child("avatar").getValue(String::class.java) ?: ""
+            act.profAvatarB64.value = av
+            if (targetId == act.currentUserId) act.currentAvatar = av
             act.profNick.value = "@$nick"
             act.profName.value = nick
             act.profBio.value = s.child("bio").getValue(String::class.java) ?: ""
@@ -112,8 +115,8 @@ private fun loadProfileGrid(act: MainActivity, gen: Int, targetId: String, mode:
         psSnap?.let { s ->
             for (p in s.children) {
                 val isMine = p.child("authorId").getValue(String::class.java) == targetId
-                val liked = act.statsMap[p.key ?: ""]?.child("likedBy")?.child(targetId)?.value != null
-                if (isMine) { own++; likes += (act.statsMap[p.key ?: ""]?.child("likes")?.value as? Number)?.toLong() ?: 0L }
+                val liked = act.optLiked[p.key ?: ""] ?: (act.statsMap[p.key ?: ""]?.child("likedBy")?.child(targetId)?.value != null)
+                if (isMine) { own++; likes += (act.optCount[p.key ?: ""] ?: (act.statsMap[p.key ?: ""]?.child("likes")?.value as? Number)?.toLong() ?: 0L) }
                 if (mode == 0 && isMine) grid.add(p)
                 if (mode == 1 && liked) grid.add(p)
             }
@@ -149,7 +152,8 @@ internal fun ProfileScreen(act: MainActivity) {
             if (isMe) GlassIconButton(R.drawable.ic_settings) { act.dialog.value = "settings" }
         }
         Row(Modifier.fillMaxWidth().padding(18.dp, 0.dp, 18.dp, 16.dp), verticalAlignment = Alignment.CenterVertically) {
-            AuthorAvatar(target, act.profName.value, 84.dp)
+            if (isMe) Avatar(act.profAvatarB64.value.ifEmpty { act.currentAvatar }, act.profName.value, 84.dp)
+            else AuthorAvatar(target, act.profName.value, 84.dp)
             Spacer(Modifier.width(20.dp))
             StatCol(postsCount, "посты", Modifier.weight(1f))
             StatCol(act.profFollowers.value, "подписчики", Modifier.weight(1f), onClick = { act.dialogArg.value = act.currentProfileTargetId; act.dialog.value = "followers" })
@@ -216,15 +220,13 @@ private fun GridTile(act: MainActivity, p: DataSnapshot, modifier: Modifier = Mo
     val txt = p.child("text").getValue(String::class.java) ?: ""
     val ver by act.statsVer
     val stats = remember(postId, ver) { act.statsMap[postId] }
-    val liked = stats?.child("likedBy")?.child(act.currentUserId)?.value != null
+    val liked = act.optLiked[postId] ?: (stats?.child("likedBy")?.child(act.currentUserId)?.value != null)
     var media by remember(postId, ver) { mutableStateOf<String?>(null) }
     LaunchedEffect(postId) {
         try { val s = awaitOnce(act.database.child("postMedia").child(postId)); media = s.getValue(String::class.java) ?: "" } catch (t: Throwable) { media = "" }
     }
-    val first = (media ?: "").split(",").firstOrNull { it.isNotEmpty() }
-    var bmp by remember(first, postId) { mutableStateOf<android.graphics.Bitmap?>(if (first != null) decodeScaled(first, 360) else null) }
-    if (bmp == null && first != null) LaunchedEffect(first) { bmp = decodeScaled(first, 360) }
-    val shown = bmp
+    val first = (media ?: "").split(",").firstOrNull { it.isNotEmpty() } ?: ""
+    val shown = rememberDecoded(first, 360)
     Box(
         modifier.height(110.dp).clip(RoundedCornerShape(6.dp)).background(ic(P.surface))
             .clickable { act.dialogArg.value = postId; act.dialog.value = "post" }
@@ -353,7 +355,8 @@ private fun EditDialog(act: MainActivity) {
             }
             Spacer(Modifier.height(16.dp))
             Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-                AuthorAvatar(act.currentUserId, act.currentNick, 96.dp)
+                // читает состояние -> после выбора фото обновляется сразу, без гонки profileGen
+                Avatar(act.editAvatarB64.value.ifEmpty { act.currentAvatar }, act.currentNick, 96.dp)
                 Spacer(Modifier.height(12.dp))
                 OutlineButton("Сменить аватар", Modifier.fillMaxWidth()) {
                     act.startActivityForResult(
@@ -425,7 +428,7 @@ private fun FollowListDialog(act: MainActivity, followers: Boolean) {
             override fun onCancelled(e: DatabaseError) {}
         })
     }
-    Dialog(onDismissRequest = { act.dialog.value = null }) {
+    Dialog(onDismissRequest = { act.dialog.value = null }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Column(Modifier.fillMaxSize().background(ic(P.bg))) {
             Row(Modifier.fillMaxWidth().padding(8.dp, 10.dp, 14.dp, 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 GlassIconButton(R.drawable.ic_back) { act.dialog.value = null }
@@ -434,7 +437,7 @@ private fun FollowListDialog(act: MainActivity, followers: Boolean) {
             }
             LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(14.dp, 6.dp, 14.dp, 20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 if (items.isEmpty()) item { Text("Пусто", color = ic(P.textSec), fontSize = 14.sp, modifier = Modifier.padding(4.dp, 20.dp)) }
-                items(items) { (uid, nick) ->
+                items(items, key = { it.first }) { (uid, nick) ->
                     Row(
                         Modifier.fillMaxWidth()
                             .background(ic(P.surface), RoundedCornerShape(14.dp))
@@ -468,6 +471,7 @@ internal fun switchToAccount(act: MainActivity, acc: Acc) {
                 override fun onDataChange(s: DataSnapshot) {
                     act.currentNick = s.child("nick").getValue(String::class.java) ?: acc.nick
                     act.currentAvatar = s.child("avatar").getValue(String::class.java) ?: ""
+                    act.profAvatarB64.value = act.currentAvatar
                     act.saveSessionPrefs()
                     refreshProfile(act)
                 }
