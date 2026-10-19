@@ -1,6 +1,7 @@
 package com.pogudka.Ahem
 
 import android.content.Context
+import android.content.Intent
 import android.graphics.Typeface
 import android.os.Bundle
 import android.os.Handler
@@ -16,13 +17,16 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.core.content.res.ResourcesCompat
 import com.google.firebase.auth.FirebaseAuth
@@ -41,11 +45,10 @@ class MainActivity : ComponentActivity() {
     internal lateinit var auth: FirebaseAuth
     internal lateinit var database: DatabaseReference
 
-    // ЕДИНЫЙ источник истины о сессии. currentUserId держим в sync с ним для firebase-логики.
     internal val sessionUid = mutableStateOf("")
     internal var currentUserId: String
         get() = sessionUid.value
-        set(v) { sessionUid.value = v }
+        set(value) { sessionUid.value = value }
 
     internal val tab = mutableStateOf(0)
     internal val panelVisible = mutableStateOf(true)
@@ -108,19 +111,25 @@ class MainActivity : ComponentActivity() {
 
     internal fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
     internal fun setNavVisible(v: Boolean) { panelVisible.value = v }
-    internal fun saveSessionPrefs() { getSharedPreferences("ahem", Context.MODE_PRIVATE).edit().putString("last_uid", currentUserId).putString("last_nick", currentNick).putString("last_email", currentEmail).apply() }
-    internal fun clearSessionPrefs() { getSharedPreferences("ahem", Context.MODE_PRIVATE).edit().remove("last_uid").remove("last_nick").remove("last_email").apply() }
 
-    // атомарная смена сессии + полный сброс зависимых состояний (чинит гонку и «самому себе»)
+    internal fun saveSessionPrefs() {
+        getSharedPreferences("ahem", Context.MODE_PRIVATE).edit()
+            .putString("last_uid", currentUserId).putString("last_nick", currentNick).putString("last_email", currentEmail).apply()
+    }
+    internal fun clearSessionPrefs() {
+        getSharedPreferences("ahem", Context.MODE_PRIVATE).edit().remove("last_uid").remove("last_nick").remove("last_email").apply()
+    }
+
     internal fun setSession(uid: String) {
-        currentUserId = uid
+        sessionUid.value = uid
         if (uid.isEmpty()) {
             currentNick = ""; currentEmail = ""; currentAvatar = ""
             viewingUserId = ""; currentProfileTargetId = ""
             chatOpen.value = false; chatPeerUid = ""; chatPeerNick = ""
             myFollowingIds.clear(); viewedLocally.clear(); statsMap.clear(); statsVer.value++
             postsRaw.clear(); pendingImages.clear(); peersList.clear(); chatMsgs.clear()
-            profTarget.value = ""; profNick.value = ""; profName.value = ""; profBio.value = ""; profAvatarB64.value = ""
+            profTarget.value = ""; profNick.value = ""; profName.value = ""; profBio.value = ""
+            profAvatarB64.value = ""; editAvatarB64.value = ""
             profFollowers.value = 0L; profFollowing.value = 0L
             clearSessionPrefs()
         }
@@ -176,7 +185,7 @@ class MainActivity : ComponentActivity() {
         authListener?.let { auth.removeAuthStateListener(it) }
     }
 
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         handleActivityResult(this, requestCode, resultCode, data)
     }
@@ -188,28 +197,30 @@ private fun AhemRoot(act: MainActivity) {
     val panel by act.panelVisible
     val tick by act.glassTick
     val icons = intArrayOf(R.drawable.ic_feed, R.drawable.ic_video, R.drawable.ic_chat, R.drawable.ic_profile)
-    Box(Modifier.fillMaxSize().background(ic(P.bg))) {
-        when (t) {
-            0 -> FeedScreen(act)
-            1 -> VideoScreen()
-            2 -> ChatScreen(act)
-            3 -> ProfileScreen(act)
-        }
-        if (panel) {
-            LiquidGlass(
-                modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 12.dp).height(64.dp),
-                tint = ic(P.navGlass), border = ic(P.border), tick = tick
-            ) {
-                Row(Modifier.fillMaxSize()) {
-                    for (i in 0 until 4) {
-                        val active = i == t
-                        IconButton(onClick = { act.showTab(i) }, modifier = Modifier.weight(1f)) {
-                            Icon(painter = painterResource(icons[i]), contentDescription = null, tint = if (active) ic(P.accent) else ic(P.navInactive))
+    CompositionLocalProvider(LocalTextStyle provides TextStyle(fontFamily = fontUbuntuReg)) {
+        Box(Modifier.fillMaxSize().background(ic(P.bg))) {
+            when (t) {
+                0 -> FeedScreen(act)
+                1 -> VideoScreen()
+                2 -> ChatScreen(act)
+                3 -> ProfileScreen(act)
+            }
+            if (panel) {
+                LiquidGlass(
+                    modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 12.dp).height(64.dp),
+                    tint = ic(P.navGlass), border = ic(P.border), tick = tick
+                ) {
+                    Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
+                        for (i in 0 until 4) {
+                            val active = i == t
+                            IconButton(onClick = { act.showTab(i) }, modifier = Modifier.weight(1f)) {
+                                Icon(painter = painterResource(icons[i]), contentDescription = null, tint = if (active) ic(P.accent) else ic(P.navInactive))
+                            }
                         }
                     }
                 }
             }
+            DialogHost(act)
         }
-        DialogHost(act)
     }
 }
