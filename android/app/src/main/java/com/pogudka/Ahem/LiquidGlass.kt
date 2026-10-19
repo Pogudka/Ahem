@@ -95,10 +95,13 @@ fun LiquidGlass(
     val dark = isDark(ctx)
     val effTint = if (tint != Color.Unspecified) tint else if (dark) Color(0x1FFFFFFF) else Color(0x14FFFFFF)
 
+    // двойной буфер: bg держим всегда, подменяем только готовым новым -> нет провалов/мигания
     var bg by remember { mutableStateOf<Bitmap?>(null) }
     var loc by remember { mutableStateOf(Offset.Zero) }
     var sz by remember { mutableStateOf(IntSize.Zero) }
-    var capturing by remember { mutableStateOf(false) }
+    // hiding = на время съёмки гасим ПЛОЩАДНЫЕ слои (мыло+tint+блик), оставляем бордер+иконки.
+    // Это разрывает feedback-цикл: в PixelCopy не попадают большие мутные области -> нет нарастающих пятен.
+    var hiding by remember { mutableStateOf(false) }
     var lastTab by remember { mutableStateOf(tabKey) }
     val shape = RoundedCornerShape(corner)
 
@@ -108,8 +111,8 @@ fun LiquidGlass(
         if (sz.width <= 0 || sz.height <= 0) return@LaunchedEffect
         val full = (bg == null) || (tabKey != lastTab)
         lastTab = tabKey
-        capturing = true
-        delay(if (full) 80L else 30L)
+        hiding = true                       // гасим площадь ДО запроса съёмки
+        delay(if (full) 80L else 30L)       // даём кадру отрисоваться без нас
         var raw: Bitmap? = null
         if (PixelCopyRef.available) {
             var tries = 0
@@ -146,31 +149,34 @@ fun LiquidGlass(
         }
         val src = raw
         if (src != null) {
+            // full = старт/таб -> рефракция; idle (тик после остановки) -> ТОЛЬКО дешёвый blur, без попиксельной рефракции
             val out = withContext(Dispatchers.Default) {
                 try {
                     if (full) refractGlass(cpuBlur(src, src.width, src.height, blur), src.width, src.height)
                     else cpuBlur(src, src.width, src.height, blur)
                 } catch (t: Throwable) { Log.w("AhemGlass", "proc-fail ${t.message}"); null }
             }
-            if (out != null) bg = out
+            if (out != null) bg = out          // подмена только готовым -> двойной буфер, без мигания
             if (out !== src) src.recycle()
         }
-        capturing = false
+        hiding = false
     }
 
     Box(
         modifier = modifier
             .onGloballyPositioned { c -> loc = c.positionInWindow(); sz = c.size }
             .clip(shape)
-            .border(1.dp, border, shape)
+            .border(1.dp, border, shape)      // бордер виден ВСЕГДА (тонкий, feedback не копит)
     ) {
-        if (!capturing) {
+        // мыло + tint + блик гасятся только на кадр съёмки (hiding); в покое и при скролле — всегда на месте
+        if (!hiding) {
             val b = bg
             if (b != null) Image(bitmap = b.asImageBitmap(), contentDescription = null, modifier = Modifier.fillMaxSize())
+            Box(Modifier.fillMaxSize().background(effTint))
+            Box(Modifier.fillMaxSize().background(Brush.linearGradient(listOf(Color(1f, 1f, 1f, 0.16f), Color(1f, 1f, 1f, 0f), Color(1f, 1f, 1f, 0.06f)))))
+            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(1f, 1f, 1f, 0.18f), Color(1f, 1f, 1f, 0f), Color(0f, 0f, 0f, 0.10f)))))
         }
-        Box(Modifier.fillMaxSize().background(effTint))
-        Box(Modifier.fillMaxSize().background(Brush.linearGradient(listOf(Color(1f, 1f, 1f, 0.16f), Color(1f, 1f, 1f, 0f), Color(1f, 1f, 1f, 0.06f)))))
-        Box(Modifier.fillMaxSize(), content = content)
+        Box(Modifier.fillMaxSize(), content = content)  // иконки видны всегда
     }
 }
 
@@ -232,7 +238,7 @@ private fun refractGlass(src: Bitmap, w: Int, h: Int): Bitmap {
 
 private fun cpuBlur(src: Bitmap, w: Int, h: Int, radius: Int): Bitmap {
     if (radius <= 0) return src
-    val down = 6
+    val down = 8                       // агрессивнее даунскейл -> idle-съёмка в разы дешевле
     val tw = (w / down).coerceAtLeast(2); val th = (h / down).coerceAtLeast(2)
     val tiny = Bitmap.createScaledBitmap(src, tw, th, true)
     val pix = IntArray(tw * th); tiny.getPixels(pix, 0, tw, 0, 0, tw, th)
