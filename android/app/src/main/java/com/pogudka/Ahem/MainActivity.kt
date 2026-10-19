@@ -45,6 +45,11 @@ class MainActivity : ComponentActivity() {
     internal lateinit var auth: FirebaseAuth
     internal lateinit var database: DatabaseReference
 
+    // snapshot-кэш аватаров: запись дёргает recompose всех читающих -> смена аватара видна сразу везде
+    internal val avatarCache = mutableStateOf(HashMap<String, String>())
+    // обычный кэш медиа (рекомпоуз не нужен, локальные state рулят)
+    internal val mediaCache = HashMap<String, String>()
+
     internal val sessionUid = mutableStateOf("")
     internal var currentUserId: String
         get() = sessionUid.value
@@ -52,6 +57,7 @@ class MainActivity : ComponentActivity() {
 
     internal val tab = mutableStateOf(0)
     internal val panelVisible = mutableStateOf(true)
+    internal val feedScrollTick = mutableStateOf(0)
     internal val dialog = mutableStateOf<String?>(null)
     internal val dialogArg = mutableStateOf("")
     internal val viewerImages = mutableStateOf<List<String>>(emptyList())
@@ -66,7 +72,6 @@ class MainActivity : ComponentActivity() {
     internal val statsMap = HashMap<String, DataSnapshot>()
     internal val statsVer = mutableStateOf(0)
 
-    // оптимистичные оверрайды (мгновенные лайки/просмотры; сервер чистит их в onComplete)
     internal val optLiked = HashMap<String, Boolean>()
     internal val optCount = HashMap<String, Long>()
     internal val optViews = HashMap<String, Long>()
@@ -174,6 +179,7 @@ class MainActivity : ComponentActivity() {
                         currentNick = snapshot.child("nick").getValue(String::class.java) ?: currentNick.ifEmpty { "Аноним" }
                         currentAvatar = snapshot.child("avatar").getValue(String::class.java) ?: ""
                         profAvatarB64.value = currentAvatar
+                        if (currentAvatar.isNotEmpty()) putAvatar(this@MainActivity, user.uid, currentAvatar)
                         currentEmail = snapshot.child("email").getValue(String::class.java) ?: currentEmail
                         saveSessionPrefs(); refreshProfile(this@MainActivity)
                     }
@@ -202,8 +208,9 @@ private fun AhemRoot(act: MainActivity) {
     val t by act.tab
     val panel by act.panelVisible
     val chatOpen by act.chatOpen
+    val tick by act.feedScrollTick
     val icons = intArrayOf(R.drawable.ic_feed, R.drawable.ic_video, R.drawable.ic_chat, R.drawable.ic_profile)
-    val showPanel = panel && !(t == 2 && chatOpen) // в открытом диалоге чата нижней панели нет
+    val showPanel = panel && !(t == 2 && chatOpen)
     CompositionLocalProvider(LocalTextStyle provides TextStyle(fontFamily = fontUbuntuReg)) {
         Box(Modifier.fillMaxSize().background(ic(P.bg))) {
             when (t) {
@@ -215,7 +222,7 @@ private fun AhemRoot(act: MainActivity) {
             if (showPanel) {
                 LiquidGlass(
                     modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 12.dp).height(64.dp),
-                    border = ic(P.border)
+                    border = ic(P.border), tabKey = t, tick = tick
                 ) {
                     Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
                         for (i in 0 until 4) {
