@@ -47,6 +47,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -436,25 +437,18 @@ private fun ZoomImage(b64: String) {
     val ctx = LocalContext.current
     val req = maxOf(ctx.resources.displayMetrics.widthPixels, ctx.resources.displayMetrics.heightPixels)
     val shown = rememberDecoded(b64, req)
+    val density = LocalDensity.current
     var scale by remember(b64) { mutableStateOf(1f) }
     var panOffset by remember(b64) { mutableStateOf(Offset.Zero) }
     Box(
         Modifier
             .fillMaxSize()
             .pointerInput(b64) {
-                detectTransformGestures { centroid, pan, zoom, _ ->
-                    val old = scale
-                    val newScale = (old * zoom).coerceIn(1f, 4f)
+                detectTransformGestures { _, pan, zoom, _ ->
+                    val newScale = (scale * zoom).coerceIn(1f, 4f)
                     panOffset += pan
-                    if (old > 0f && newScale != old) {
-                        val ratio = newScale / old
-                        panOffset += (centroid - panOffset) * (1f - ratio)
-                    }
                     scale = newScale
-                    if (scale <= 1.02f) {
-                        scale = 1f
-                        panOffset = Offset.Zero
-                    }
+                    if (scale <= 1.02f) { scale = 1f; panOffset = Offset.Zero }
                 }
             },
         contentAlignment = Alignment.Center
@@ -466,7 +460,7 @@ private fun ZoomImage(b64: String) {
             modifier = Modifier
                 .fillMaxSize()
                 .scale(scale)
-                .offset(panOffset.x.toInt(), panOffset.y.toInt())
+                .offset(with(density) { panOffset.x.toDp() }, with(density) { panOffset.y.toDp() })
         )
     }
 }
