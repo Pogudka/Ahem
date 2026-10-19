@@ -82,6 +82,7 @@ class MainActivity : ComponentActivity() {
     internal val profName = mutableStateOf("")
     internal val profBio = mutableStateOf("")
     internal val profAvatarB64 = mutableStateOf("")
+    internal val editAvatarB64 = mutableStateOf("")
     internal val profFollowers = mutableStateOf(0L)
     internal val profFollowing = mutableStateOf(0L)
     internal var viewingUserId = ""
