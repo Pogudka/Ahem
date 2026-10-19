@@ -38,9 +38,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -63,6 +65,8 @@ import com.google.firebase.database.MutableData
 import com.google.firebase.database.Transaction
 import com.google.firebase.database.ValueEventListener
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -154,9 +158,13 @@ internal fun FeedScreen(act: MainActivity) {
         onRefresh = { act.refreshing.value = true; loadFeed(act) { act.refreshing.value = false } },
         refreshThreshold = 150.dp
     )
-    LaunchedEffect(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset / 600) {
-        delay(220)
-        act.feedScrollTick.value++
+    // СКРОЛЛ-СОСТОЯНИЕ ЧИТАЕТСЯ ТОЛЬКО ВНУТРИ snapshotFlow (не в теле композиции) -> FeedScreen НЕ реконспицируется при скролле = 60fps.
+    // debounce -> тик стекла только ПОСЛЕ остановки ленты, в движении ноль пересъёмов.
+    LaunchedEffect(Unit) {
+        snapshotFlow { listState.firstVisibleItemIndex to (listState.firstVisibleItemScrollOffset / 300) }
+            .distinctUntilChanged()
+            .debounce(300L)
+            .collect { act.feedScrollTick.value++ }
     }
     Column(Modifier.fillMaxSize().background(ic(P.bg))) {
         if (me.isEmpty()) {
@@ -203,19 +211,28 @@ internal fun FeedScreen(act: MainActivity) {
     }
 }
 
+// виден ТОЛЬКО при тяге/refresh; 30dp; при тяге крутится по прогрессу, при refresh — бесконечно (спит в покое)
 @OptIn(ExperimentalMaterialApi::class)
 @Composable
 private fun RefreshIndicator(pr: PullRefreshState, refreshing: Boolean, modifier: Modifier = Modifier) {
-    val dens = LocalDensity.current
     val prog = pr.progress.coerceIn(0f, 1f)
+    val visible = prog > 0.01f || refreshing
+    val dens = LocalDensity.current
     val top = with(dens) { (prog * 56f).toDp() }
-    Box(modifier.padding(top = top + 8.dp), contentAlignment = Alignment.Center) {
-        Icon(
-            painter = painterResource(R.drawable.ic_refresh),
-            contentDescription = null,
-            tint = ic(P.textSec),
-            modifier = Modifier.size((20f + prog * 12f).dp).scale(if (refreshing) 1f else 0.6f + prog * 0.4f)
-        )
+    var spin by remember { mutableStateOf(0f) }
+    LaunchedEffect(refreshing) {
+        if (refreshing) { while (true) { delay(16L); spin = (spin + 14f) % 360f } }
+    }
+    if (visible) {
+        val rot = if (refreshing) spin else prog * 270f
+        Box(modifier.padding(top = top + 10.dp), contentAlignment = Alignment.Center) {
+            Icon(
+                painter = painterResource(R.drawable.ic_refresh),
+                contentDescription = null,
+                tint = ic(P.textSec),
+                modifier = Modifier.size(30.dp).rotate(rot).scale(if (refreshing) 1f else 0.7f + prog * 0.3f)
+            )
+        }
     }
 }
 
@@ -456,6 +473,9 @@ internal fun ViewerDialog(act: MainActivity) {
     }
 }
 
+// свайп 1 пальцем = перемотка (pager), пинч 2 пальцами = зум, двойной тап = in/out.
+// detectTransformGestures висит всегда, но ТРОГАЕТ картинку только при мультитаче (zoom!=1) или уже в зуме;
+// при одном пальце и scale==1 не потребляет жест -> HorizontalPager листает чисто.
 @Composable
 private fun ZoomImage(b64: String) {
     val ctx = LocalContext.current
@@ -464,20 +484,24 @@ private fun ZoomImage(b64: String) {
     val dens = LocalDensity.current
     var scale by remember(b64) { mutableStateOf(1f) }
     var pan by remember(b64) { mutableStateOf(Offset.Zero) }
-    val base = Modifier.fillMaxSize().pointerInput(b64) {
-        detectTapGestures(onDoubleTap = {
-            if (scale > 1.05f) { scale = 1f; pan = Offset.Zero } else { scale = 2.2f; pan = Offset.Zero }
-        })
-    }
-    val zoomed = if (scale > 1.05f) base.pointerInput(b64) {
-        detectTransformGestures { _, panBy, zoom, _ ->
-            val ns = (scale * zoom).coerceIn(1f, 3f)
-            pan += panBy
-            scale = ns
-            if (scale <= 1.02f) { scale = 1f; pan = Offset.Zero }
-        }
-    } else base
-    Box(zoomed, contentAlignment = Alignment.Center) {
+    Box(
+        Modifier.fillMaxSize()
+            .pointerInput(b64) {
+                detectTapGestures(onDoubleTap = {
+                    if (scale > 1.05f) { scale = 1f; pan = Offset.Zero } else { scale = 2.5f; pan = Offset.Zero }
+                })
+            }
+            .pointerInput(b64) {
+                detectTransformGestures { _, panBy, zoom, _ ->
+                    val multiTouch = zoom < 0.999f || zoom > 1.001f
+                    if (scale > 1.02f || multiTouch) {
+                        val ns = (scale * zoom).coerceIn(1f, 4f)
+                        if (ns > 1.02f) { pan += panBy; scale = ns } else { scale = 1f; pan = Offset.Zero }
+                    }
+                }
+            },
+        contentAlignment = Alignment.Center
+    ) {
         if (shown != null) Image(
             bitmap = shown.asImageBitmap(),
             contentDescription = null,
