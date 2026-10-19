@@ -57,16 +57,19 @@ private fun msgText(m: DataSnapshot): String = try {
     if (r.isEmpty()) { val d = m.value; if (d is String && d.isNotEmpty()) r = d }
     r
 } catch (e: Exception) { "" }
+
 private fun msgTs(m: DataSnapshot): Long = try {
     var r = 0L
     for (k in arrayOf("ts","timestamp","time","createdAt","created","date","at","sentAt")) { val v = m.child(k).value; if (v is Number) { r = v.toLong(); break }; val s = (v as? String)?.toLongOrNull(); if (s != null) { r = s; break } }
     r
 } catch (e: Exception) { 0L }
+
 private fun msgNick(m: DataSnapshot): String = try {
     var r = ""
     for (k in arrayOf("nick","senderNick","authorNick","fromNick","name","user")) { val v = m.child(k).getValue(String::class.java); if (!v.isNullOrEmpty()) { r = v; break } }
     r
 } catch (e: Exception) { "" }
+
 private fun msgMine(m: DataSnapshot, myUid: String, myNick: String, def: Boolean): Boolean = try {
     var res: Boolean? = null
     for (k in arrayOf("senderUid","from","uid","sender","author","userId","owner","by")) { val v = m.child(k).getValue(String::class.java) ?: ""; if (v.isNotEmpty()) { res = (v == myUid); break } }
@@ -104,11 +107,14 @@ internal fun ChatScreen(act: MainActivity) {
 
 @Composable
 private fun ConversationList(act: MainActivity) {
-    LaunchedEffect(act.currentUserId) { loadConversations(act) }
+    val me by act.sessionUid
+    LaunchedEffect(me) { loadConversations(act) }
     val rows = act.peersList.toList()
     val status by act.chatStatus
     Column(Modifier.fillMaxSize().background(ic(P.bg))) {
-        Row(Modifier.fillMaxWidth().padding(18.dp, 14.dp, 18.dp, 10.dp), verticalAlignment = Alignment.CenterVertically) { Text("Сообщения", color = ic(P.text), fontSize = 22.sp, fontWeight = FontWeight.Bold) }
+        Row(Modifier.fillMaxWidth().padding(18.dp, 14.dp, 18.dp, 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Сообщения", color = ic(P.text), fontSize = 22.sp, fontWeight = FontWeight.Bold)
+        }
         if (status.isNotEmpty()) Text(status, color = ic(P.textSec), fontSize = 13.sp, modifier = Modifier.padding(18.dp, 0.dp, 18.dp, 6.dp))
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(14.dp, 0.dp, 14.dp, 96.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             items(rows) { row ->
@@ -160,7 +166,9 @@ private fun Conversation(act: MainActivity, peerUid: String, peerNick: String) {
             Box(Modifier.weight(1f).padding(12.dp, 10.dp)) {
                 BasicTextField(value = input.value, onValueChange = { input.value = it }, textStyle = TextStyle(color = ic(P.text), fontSize = 15.sp), modifier = Modifier.fillMaxWidth(), decorationBox = { inner -> if (input.value.isEmpty()) Text("Сообщение...", color = ic(P.textSec), fontSize = 15.sp); inner() })
             }
-            Box(Modifier.clickable { sendMsg(act, peerUid, input.value); input.value = "" }, contentAlignment = Alignment.Center) { Icon(painter = painterResource(R.drawable.ic_send), contentDescription = null, tint = ic(P.text), modifier = Modifier.padding(8.dp)) }
+            Box(Modifier.clickable { sendMsg(act, peerUid, input.value); input.value = "" }, contentAlignment = Alignment.Center) {
+                Icon(painter = painterResource(R.drawable.ic_send), contentDescription = null, tint = ic(P.text), modifier = Modifier.padding(8.dp))
+            }
         }
     }
 }
@@ -179,14 +187,19 @@ private fun Bubble(m: Msg) {
 private fun mergeMsgs(target: MutableList<Msg>, s: DataSnapshot, act: MainActivity, def: Boolean) {
     val existing = HashSet<String>(); for (m in target) existing.add(m.ts.toString() + "|" + m.text)
     var changed = false
-    for (c in s.children) { val t = msgText(c); if (t.isEmpty()) continue; val key = msgTs(c).toString() + "|" + t; if (existing.add(key)) { target.add(Msg(t, msgTs(c), msgMine(c, act.currentUserId, act.currentNick, def))); changed = true } }
+    for (c in s.children) {
+        val t = msgText(c); if (t.isEmpty()) continue
+        val key = msgTs(c).toString() + "|" + t
+        if (existing.add(key)) { target.add(Msg(t, msgTs(c), msgMine(c, act.currentUserId, act.currentNick, def))); changed = true }
+    }
     if (changed) { val sorted = target.sortedBy { it.ts }; target.clear(); target.addAll(sorted) }
 }
 
 internal fun sendMsg(act: MainActivity, peer: String, raw: String) {
-    if (act.currentUserId.isEmpty() || peer.isEmpty()) return
+    val me = act.currentUserId
+    if (me.isEmpty() || peer.isEmpty() || peer == me) return
     val text = raw.trim(); if (text.isEmpty()) return
-    val now = System.currentTimeMillis(); val me = act.currentUserId
+    val now = System.currentTimeMillis()
     val payload = HashMap<String, Any>()
     payload["text"] = text; payload["message"] = text; payload["body"] = text; payload["ts"] = now; payload["timestamp"] = now; payload["createdAt"] = now; payload["senderUid"] = me; payload["uid"] = me; payload["from"] = me; payload["nick"] = act.currentNick
     val ri = act.database.child("conversations").child(me).child(peer); val ki = ri.push().key; if (ki != null) { val m = HashMap(payload); m["mine"] = true; ri.child(ki).setValue(m) }
@@ -196,20 +209,22 @@ internal fun sendMsg(act: MainActivity, peer: String, raw: String) {
 }
 
 internal fun loadConversations(act: MainActivity) {
-    if (act.currentUserId.isEmpty()) { act.chatStatus.value = "не залогинен"; return }
+    val me = act.currentUserId
+    if (me.isEmpty()) { act.chatStatus.value = "не залогинен"; act.peersList.clear(); return }
     act.chatStatus.value = "загрузка..."
     act.database.child("users").addListenerForSingleValueEvent(object : ValueEventListener {
         override fun onDataChange(uSnap: DataSnapshot) {
             val nickMap = HashMap<String, String>(); val avatarMap = HashMap<String, String>()
             try { for (u in uSnap.children) { val uid = u.key ?: continue; nickMap[uid] = u.child("nick").getValue(String::class.java) ?: "?"; avatarMap[uid] = u.child("avatar").getValue(String::class.java) ?: "" } } catch (e: Exception) {}
-            act.database.child("conversations").child(act.currentUserId).addListenerForSingleValueEvent(object : ValueEventListener {
+            act.database.child("conversations").child(me).addListenerForSingleValueEvent(object : ValueEventListener {
                 override fun onDataChange(s: DataSnapshot) {
                     val peers = loadPeers(act)
-                    try { for (c in s.children) { val uid = c.key ?: continue; if (uid == act.currentUserId) continue; if (!peers.containsKey(uid)) peers[uid] = "?" } } catch (e: Exception) {}
+                    try { for (c in s.children) { val uid = c.key ?: continue; if (uid == me) continue; if (!peers.containsKey(uid)) peers[uid] = "?" } } catch (e: Exception) {}
                     val lastTs = HashMap<String, Long>(); val lastTxt = HashMap<String, String>()
-                    try { for (c in s.children) { val uid = c.key ?: continue; var t = 0L; var txt = ""; for (m in c.children) { val ts = msgTs(m); val tx = msgText(m); if (tx.isNotEmpty() && ts >= t) { t = ts; txt = tx } }; lastTs[uid] = t; lastTxt[uid] = txt } } catch (e: Exception) {}
+                    try { for (c in s.children) { val uid = c.key ?: continue; if (uid == me) continue; var t = 0L; var txt = ""; for (m in c.children) { val ts = msgTs(m); val tx = msgText(m); if (tx.isNotEmpty() && ts >= t) { t = ts; txt = tx } }; lastTs[uid] = t; lastTxt[uid] = txt } } catch (e: Exception) {}
                     act.peersList.clear()
                     for (uid in peers.keys.sortedByDescending { lastTs[it] ?: 0L }) {
+                        if (uid == me) continue
                         val nick = nickMap[uid]?.takeIf { it != "?" } ?: (peers[uid] ?: "?")
                         act.peersList.add(PeerRow(uid, nick, lastTxt[uid] ?: "", avatarMap[uid] ?: ""))
                     }
