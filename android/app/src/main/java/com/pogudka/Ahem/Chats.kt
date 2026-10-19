@@ -157,7 +157,7 @@ private fun Conversation(act: MainActivity, peerUid: String, peerNick: String) {
         LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = listState, contentPadding = PaddingValues(14.dp, 6.dp, 14.dp, 8.dp), verticalArrangement = Arrangement.Bottom) {
             items(msgs) { m -> Bubble(m) }
         }
-        Row(Modifier.fillMaxWidth().padding(14.dp, 0.dp, 14.dp, 96.dp).background(ic(P.surface), RoundedCornerShape(26.dp)).border(1.dp, ic(P.border), RoundedCornerShape(26.dp)).padding(8.dp, 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().padding(14.dp, 0.dp, 14.dp, 16.dp).background(ic(P.surface), RoundedCornerShape(26.dp)).border(1.dp, ic(P.border), RoundedCornerShape(26.dp)).padding(8.dp, 6.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.weight(1f).padding(12.dp, 10.dp)) {
                 BasicTextField(value = input.value, onValueChange = { input.value = it }, textStyle = TextStyle(color = ic(P.text), fontSize = 15.sp, fontFamily = fontUbuntuReg), modifier = Modifier.fillMaxWidth(), decorationBox = { inner -> if (input.value.isEmpty()) Text("Сообщение...", color = ic(P.textSec), fontSize = 15.sp); inner() })
             }
