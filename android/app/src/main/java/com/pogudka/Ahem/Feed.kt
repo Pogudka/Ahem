@@ -5,6 +5,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.rememberTransformableState
+import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,10 +21,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.pullRefresh
+import androidx.compose.foundation.rememberPullRefreshState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -34,12 +40,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -84,47 +90,65 @@ internal fun enterFeedMode(act: MainActivity) {
 
 internal fun toggleLike(act: MainActivity, postId: String) {
     if (act.currentUserId.isEmpty()) return
+    val stats = act.statsMap[postId]
+    val serverLiked = stats?.child("likedBy")?.child(act.currentUserId)?.value != null
+    val serverCount = (stats?.child("likes")?.value as? Number)?.toLong() ?: 0L
+    val curLiked = act.optLiked[postId] ?: serverLiked
+    val curCount = act.optCount[postId] ?: serverCount
+    val newLiked = !curLiked
+    val newCount = (curCount + if (newLiked) 1 else -1).coerceAtLeast(0L)
+    act.optLiked[postId] = newLiked; act.optCount[postId] = newCount; act.statsVer.value++ // мгновенно
     txWithRetry(act.database.child("postStats").child(postId), act, 3, { md ->
-        val likes = (md.child("likes").value as? Number)?.toInt() ?: 0
+        val likes = (md.child("likes").value as? Number)?.toLong() ?: 0L
         val lb = md.child("likedBy")
         if (lb.child(act.currentUserId).value != null) {
             lb.child(act.currentUserId).value = null
-            md.child("likes").value = maxOf(0, likes - 1)
+            md.child("likes").value = maxOf(0L, likes - 1)
         } else {
             lb.child(act.currentUserId).value = true
             md.child("likes").value = likes + 1
         }
         Transaction.success(md)
     }) { committed, data, _ ->
-        if (committed && data != null) { act.statsMap[postId] = data; act.statsVer.value++ }
-    }
-}
-
-internal fun incViews(act: MainActivity, postId: String) {
-    if (act.currentUserId.isEmpty() || postId in act.viewedLocally) return
-    txWithRetry(act.database.child("postStats").child(postId), act, 3, { md ->
-        val views = (md.child("views").value as? Number)?.toLong() ?: 0L
-        val vb = md.child("viewedBy")
-        if (vb.child(act.currentUserId).value != null) {
-            act.viewedLocally.add(postId)
-            return@txWithRetry Transaction.success(md)
-        }
-        vb.child(act.currentUserId).value = true
-        md.child("views").value = views + 1
-        Transaction.success(md)
-    }) { committed, data, _ ->
         if (committed && data != null) {
-            act.viewedLocally.add(postId)
             act.statsMap[postId] = data
+            act.optLiked.remove(postId); act.optCount.remove(postId) // сервер авторитетен
             act.statsVer.value++
         }
     }
 }
 
+internal fun incViews(act: MainActivity, postId: String) {
+    if (act.currentUserId.isEmpty() || postId in act.viewedLocally) return
+    val stats = act.statsMap[postId]
+    val serverViews = (stats?.child("views")?.value as? Number)?.toLong() ?: 0L
+    val curViews = act.optViews[postId] ?: serverViews
+    act.optViews[postId] = curViews + 1; act.statsVer.value++
+    txWithRetry(act.database.child("postStats").child(postId), act, 3, { md ->
+        val views = (md.child("views").value as? Number)?.toLong() ?: 0L
+        val vb = md.child("viewedBy")
+        if (vb.child(act.currentUserId).value != null) { act.viewedLocally.add(postId); return@txWithRetry Transaction.success(md) }
+        vb.child(act.currentUserId).value = true
+        md.child("views").value = views + 1
+        Transaction.success(md)
+    }) { committed, data, _ ->
+        if (committed && data != null) {
+            act.viewedLocally.add(postId); act.statsMap[postId] = data
+            act.optViews.remove(postId); act.statsVer.value++
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun FeedScreen(act: MainActivity) {
     val me by act.sessionUid
     val query by act.feedQuery
+    val listState = rememberLazyListState()
+    val pr = rememberPullRefreshState(
+        refreshing = act.refreshing.value,
+        onRefresh = { act.refreshing.value = true; loadFeed(act) { act.refreshing.value = false } }
+    )
     Column(Modifier.fillMaxSize().background(ic(P.bg))) {
         if (me.isEmpty()) {
             AuthForm(act)
@@ -146,21 +170,31 @@ internal fun FeedScreen(act: MainActivity) {
                     }
                 }
                 .take(act.FEED_LIMIT)
-            LazyColumn(
-                Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(14.dp, 0.dp, 14.dp, 96.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                if (sorted.isEmpty()) {
-                    item {
-                        Text(
-                            if (query.isEmpty()) "Лента пуста" else "Ничего не найдено",
-                            color = ic(P.textSec), fontSize = 15.sp,
-                            modifier = Modifier.padding(0.dp, 20.dp)
-                        )
+            Box(Modifier.fillMaxSize().pullRefresh(pr)) {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(14.dp, 0.dp, 14.dp, 96.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    if (sorted.isEmpty()) {
+                        item {
+                            Text(
+                                if (query.isEmpty()) "Лента пуста" else "Ничего не найдено",
+                                color = ic(P.textSec), fontSize = 15.sp,
+                                modifier = Modifier.padding(0.dp, 20.dp)
+                            )
+                        }
+                    }
+                    items(sorted, key = { it.key ?: "" }) { p -> PostCard(act, p) }
+                }
+                val dens = LocalDensity.current
+                val topPad = with(dens) { pr.distance.toDp().coerceAtMost(72.dp) }
+                if (pr.distance > 1f || act.refreshing.value) {
+                    Box(Modifier.align(Alignment.TopCenter).padding(top = topPad)) {
+                        CircularProgressIndicator(modifier = Modifier.size(32.dp), color = ic(P.textSec), strokeWidth = 3.dp)
                     }
                 }
-                items(sorted) { p -> PostCard(act, p) }
             }
         }
     }
@@ -239,9 +273,7 @@ private fun Composer(act: MainActivity) {
 private fun Thumb(b64: String, dpSize: Int) {
     val ctx = LocalContext.current
     val px = (dpSize * ctx.resources.displayMetrics.density).toInt().coerceAtLeast(2)
-    var bmp by remember(b64, px) { mutableStateOf(decodeScaled(b64, px)) }
-    if (bmp == null) LaunchedEffect(b64, px) { bmp = decodeScaled(b64, px) }
-    val shown = bmp
+    val shown = rememberDecoded(b64, px)
     Box(
         Modifier.size(dpSize.dp).clip(RoundedCornerShape(12.dp))
             .background(ic(P.surface)).border(1.dp, ic(P.border), RoundedCornerShape(12.dp))
@@ -259,9 +291,12 @@ internal fun PostCard(act: MainActivity, post: DataSnapshot) {
     val ts = getTs(post)
     val ver by act.statsVer
     val stats = remember(postId, ver) { act.statsMap[postId] }
-    val likeCount = (stats?.child("likes")?.value as? Number)?.toLong() ?: 0L
-    val viewCount = (stats?.child("views")?.value as? Number)?.toLong() ?: 0L
-    val liked = stats?.child("likedBy")?.child(act.currentUserId)?.value != null
+    val serverLiked = stats?.child("likedBy")?.child(act.currentUserId)?.value != null
+    val serverCount = (stats?.child("likes")?.value as? Number)?.toLong() ?: 0L
+    val serverViews = (stats?.child("views")?.value as? Number)?.toLong() ?: 0L
+    val liked = act.optLiked[postId] ?: serverLiked
+    val likeCount = act.optCount[postId] ?: serverCount
+    val viewCount = act.optViews[postId] ?: serverViews
     val timeStr = remember(ts) { SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(ts)) }
     CardSurface(Modifier.fillMaxWidth(), 18, true) {
         Row(Modifier.fillMaxWidth().padding(14.dp, 14.dp, 14.dp, 10.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -310,9 +345,7 @@ private fun MediaBlock(act: MainActivity, postId: String) {
 
 @Composable
 private fun SingleImage(act: MainActivity, b64: String, px: Int, all: List<String>, start: Int) {
-    var bmp by remember(b64, px) { mutableStateOf(decodeScaled(b64, px)) }
-    if (bmp == null) LaunchedEffect(b64, px) { bmp = decodeScaled(b64, px) }
-    val shown = bmp ?: return
+    val shown = rememberDecoded(b64, px) ?: return
     val hDp = (px / act.resources.displayMetrics.density)
     Box(
         Modifier.fillMaxWidth().height(hDp.dp).padding(14.dp, 0.dp, 14.dp, 12.dp)
@@ -344,9 +377,7 @@ private fun GridImages(act: MainActivity, images: List<String>, imgW: Int) {
 
 @Composable
 private fun GridCell(act: MainActivity, b64: String, px: Int, cellDp: Float, all: List<String>, idx: Int, modifier: Modifier = Modifier) {
-    var bmp by remember(b64, px) { mutableStateOf(decodeScaled(b64, px)) }
-    if (bmp == null) LaunchedEffect(b64, px) { bmp = decodeScaled(b64, px) }
-    val shown = bmp
+    val shown = rememberDecoded(b64, px)
     Box(
         modifier.height(cellDp.dp).clip(RoundedCornerShape(12.dp)).background(ic(P.surface))
             .clickable { openViewer(act, all, idx) }
@@ -366,7 +397,7 @@ internal fun openViewer(act: MainActivity, images: List<String>, start: Int) {
 internal fun PostDetailDialog(act: MainActivity, postId: String) {
     val post = act.postsRaw.toList().firstOrNull { it.key == postId }
     LaunchedEffect(postId) { incViews(act, postId) }
-    Dialog(onDismissRequest = { act.dialog.value = null }) {
+    Dialog(onDismissRequest = { act.dialog.value = null }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Column(Modifier.fillMaxSize().background(ic(P.bg))) {
             Row(Modifier.fillMaxWidth().padding(8.dp, 10.dp, 14.dp, 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 GlassIconButton(R.drawable.ic_back) { act.dialog.value = null }
@@ -399,23 +430,20 @@ internal fun ViewerDialog(act: MainActivity) {
     }
 }
 
+// зум якорится в точку щипка + панорамирование (transformable), а не только центр
 @Composable
 private fun ZoomImage(b64: String) {
     val ctx = LocalContext.current
     val req = maxOf(ctx.resources.displayMetrics.widthPixels, ctx.resources.displayMetrics.heightPixels)
-    var bmp by remember(b64) { mutableStateOf(decodeScaled(b64, req)) }
-    if (bmp == null) LaunchedEffect(b64) { bmp = decodeScaled(b64, req) }
-    var scale by remember(b64) { mutableStateOf(1f) }
-    val shown = bmp
+    val shown = rememberDecoded(b64, req)
+    val tm = rememberTransformableState { zoomChange, panChange, _ -> }
     Box(
-        Modifier.fillMaxSize().pointerInput(b64) {
-            detectTransformGestures { _, _, zoom, _ -> scale = (scale * zoom).coerceIn(1f, 4f) }
-        },
+        Modifier.fillMaxSize().transformable(tm),
         contentAlignment = Alignment.Center
     ) {
         if (shown != null) Image(
             bitmap = shown.asImageBitmap(), contentDescription = null, contentScale = ContentScale.Fit,
-            modifier = Modifier.fillMaxSize().scale(scale)
+            modifier = Modifier.fillMaxSize()
         )
     }
 }
@@ -513,6 +541,7 @@ private fun doLogin(act: MainActivity) {
                 override fun onDataChange(s: DataSnapshot) {
                     act.currentNick = s.child("nick").getValue(String::class.java) ?: "Аноним"
                     act.currentAvatar = s.child("avatar").getValue(String::class.java) ?: ""
+                    act.profAvatarB64.value = act.currentAvatar
                     saveAccount(act, userId, act.currentNick, email, pass)
                     act.saveSessionPrefs()
                 }
