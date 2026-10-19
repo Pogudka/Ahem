@@ -63,6 +63,7 @@ internal fun refreshProfile(act: MainActivity) {
 }
 
 internal fun openUserProfile(act: MainActivity, userId: String, nick: String) {
+    if (userId.isEmpty()) return
     act.viewingUserId = userId
     act.showTab(3, keep = true)
 }
@@ -127,14 +128,15 @@ private fun loadProfileGrid(act: MainActivity, gen: Int, targetId: String, mode:
 
 @Composable
 internal fun ProfileScreen(act: MainActivity) {
+    val me by act.sessionUid
     val target by act.profTarget
-    val isMe = target == act.currentUserId
+    val isMe = target.isNotEmpty() && target == me
     var mode by remember { mutableStateOf(0) }
     val grid = remember { mutableStateListOf<DataSnapshot>() }
     var postsCount by remember { mutableStateOf(0L) }
     var likesCount by remember { mutableStateOf(0L) }
     LaunchedEffect(target) { mode = 0 }
-    LaunchedEffect(target, mode, act.currentUserId, act.statsVer.value) {
+    LaunchedEffect(target, mode, me, act.statsVer.value) {
         if (target.isEmpty()) return@LaunchedEffect
         val gen = act.profileGen
         loadProfileGrid(act, gen, target, mode) { g, pc, lc ->
@@ -158,7 +160,8 @@ internal fun ProfileScreen(act: MainActivity) {
         if (act.profBio.value.isNotEmpty()) Text(act.profBio.value, color = ic(P.text), fontSize = 14.sp, modifier = Modifier.padding(18.dp, 0.dp, 18.dp, 14.dp))
         Row(Modifier.fillMaxWidth().padding(18.dp, 0.dp, 18.dp, 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (isMe) OutlineButton("Редактировать профиль", Modifier.weight(1f)) { act.dialog.value = "edit" }
-            else OutlineButton("Написать", Modifier.weight(1f)) { openChat(act, act.currentProfileTargetId, act.profName.value) }
+            else if (target.isNotEmpty() && target != me) OutlineButton("Написать", Modifier.weight(1f)) { openChat(act, target, act.profName.value) }
+            else Spacer(Modifier.weight(1f))
             OutlineButton("Поделиться", Modifier.weight(1f)) {
                 val cm = act.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                 cm.setPrimaryClip(ClipData.newPlainText("nick", "@" + act.profName.value))
@@ -450,17 +453,14 @@ private fun FollowListDialog(act: MainActivity, followers: Boolean) {
 }
 
 internal fun switchToAccount(act: MainActivity, acc: Acc) {
-    act.viewingUserId = ""
-    act.currentUserId = ""; act.currentNick = ""; act.currentEmail = ""; act.currentAvatar = ""
-    act.myFollowingIds.clear()
-    act.showTab(0)
-    act.authScreen.value = true
+    act.setSession("")
     act.isLoggingIn = true
     act.auth.signInWithEmailAndPassword(acc.email, acc.pass).addOnCompleteListener { task ->
         act.isLoggingIn = false
         if (task.isSuccessful) {
             val uid = act.auth.currentUser?.uid ?: ""
-            act.currentUserId = uid; act.currentEmail = acc.email; act.viewingUserId = uid
+            act.setSession(uid)
+            act.currentEmail = acc.email; act.viewingUserId = uid
             enterFeedMode(act)
             loadMyFollowing(act) {}
             act.database.child("users").child(uid).addListenerForSingleValueEvent(object : ValueEventListener {
@@ -480,13 +480,10 @@ internal fun switchToAccount(act: MainActivity, acc: Acc) {
 }
 
 internal fun switchToManual(act: MainActivity) {
-    act.viewingUserId = ""
-    act.currentUserId = ""; act.currentNick = ""; act.currentEmail = ""; act.currentAvatar = ""
-    act.myFollowingIds.clear()
-    act.showTab(0)
-    act.authScreen.value = true
+    act.setSession("")
     act.feedStatus.value = "вход / регистрация"
     act.emailInput.value = ""; act.nickInput.value = ""; act.passInput.value = ""
+    act.showTab(0)
 }
 
 internal fun setThemeAndRestart(act: MainActivity, dark: Boolean) {
