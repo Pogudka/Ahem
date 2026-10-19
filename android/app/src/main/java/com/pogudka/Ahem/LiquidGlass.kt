@@ -39,7 +39,6 @@ import kotlinx.coroutines.withContext
 import java.lang.reflect.InvocationHandler
 import java.lang.reflect.Method
 import java.lang.reflect.Proxy
-import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sqrt
@@ -73,20 +72,21 @@ private object PixelCopyRef {
     }
 }
 
-// ---- настройки стекла (под референс) ----
-private const val REFRACT = 0.30f      // сила выпуклой линзы (доля радиуса)
-private const val CHROMA = 0.16f       // радужная каёмка (доля от дисплейсмента)
-private const val EDGE = 7f            // толщина световой кромки в px
-private const val HL = 0.95f           // яркость кромки
-private const val BLUR_R = 9           // лёгкий blur фона ДО рефракции
+private const val REFRACT = 0.30f
+private const val CHROMA = 0.16f
+private const val EDGE = 7f
+private const val HL = 0.95f
+private const val BLUR_R = 9
 
 @Composable
 fun LiquidGlass(
     modifier: Modifier = Modifier,
     corner: Dp = 30.dp,
-    tint: Color = Color.Unspecified,   // Unspecified -> авто по теме
+    tint: Color = Color.Unspecified,
     border: Color = ic(P.border),
     blur: Int = BLUR_R,
+    tabKey: Any? = null,
+    tick: Any? = null,
     content: @Composable BoxScope.() -> Unit
 ) {
     val ctx = LocalContext.current
@@ -99,15 +99,17 @@ fun LiquidGlass(
     var loc by remember { mutableStateOf(Offset.Zero) }
     var sz by remember { mutableStateOf(IntSize.Zero) }
     var capturing by remember { mutableStateOf(false) }
+    var lastTab by remember { mutableStateOf(tabKey) }
     val shape = RoundedCornerShape(corner)
 
-    // захват ТОЛЬКО по размеру/позиции -> смена таба не переснимает -> нет мерцания при переходах
-    LaunchedEffect(loc, sz) {
+    LaunchedEffect(loc, sz, tabKey, tick) {
         val w = window ?: return@LaunchedEffect
         val act = activity ?: return@LaunchedEffect
         if (sz.width <= 0 || sz.height <= 0) return@LaunchedEffect
-        capturing = true                 // скрываем ВСЮ панель -> в фон не попадает само стекло
-        delay(80)
+        val full = (bg == null) || (tabKey != lastTab)
+        lastTab = tabKey
+        capturing = true
+        delay(if (full) 80L else 30L)
         var raw: Bitmap? = null
         if (PixelCopyRef.available) {
             var tries = 0
@@ -132,22 +134,23 @@ fun LiquidGlass(
                 val dv = act.window.decorView
                 val dw = dv.width; val dh = dv.height
                 if (dw > 0 && dh > 0) {
-                    val full = Bitmap.createBitmap(dw, dh, Bitmap.Config.ARGB_8888)
-                    dv.draw(Canvas(full))
+                    val fullBmp = Bitmap.createBitmap(dw, dh, Bitmap.Config.ARGB_8888)
+                    dv.draw(Canvas(fullBmp))
                     val x = loc.x.toInt().coerceIn(0, dw - 1)
                     val y = loc.y.toInt().coerceIn(0, dh - 1)
                     val cw = sz.width.coerceAtMost(dw - x)
                     val ch = sz.height.coerceAtMost(dh - y)
-                    if (cw > 0 && ch > 0) { raw = Bitmap.createBitmap(full, x, y, cw, ch); full.recycle() } else full.recycle()
+                    if (cw > 0 && ch > 0) { raw = Bitmap.createBitmap(fullBmp, x, y, cw, ch); fullBmp.recycle() } else fullBmp.recycle()
                 }
             } catch (t: Throwable) { Log.w("AhemGlass", "draw-fail ${t.message}") }
         }
         val src = raw
         if (src != null) {
-            // blur + рефракция + хроматика + кромка — вне главного потока
             val out = withContext(Dispatchers.Default) {
-                try { refractGlass(cpuBlur(src, src.width, src.height, blur), src.width, src.height) }
-                catch (t: Throwable) { Log.w("AhemGlass", "refract-fail ${t.message}"); null }
+                try {
+                    if (full) refractGlass(cpuBlur(src, src.width, src.height, blur), src.width, src.height)
+                    else cpuBlur(src, src.width, src.height, blur)
+                } catch (t: Throwable) { Log.w("AhemGlass", "proc-fail ${t.message}"); null }
             }
             if (out != null) bg = out
             if (out !== src) src.recycle()
@@ -161,30 +164,26 @@ fun LiquidGlass(
             .clip(shape)
             .border(1.dp, border, shape)
     ) {
-        // слой преломлённого фона (когда готов); до готовности — пусто, но tint/кромка/иконки живут всегда
         if (!capturing) {
             val b = bg
             if (b != null) Image(bitmap = b.asImageBitmap(), contentDescription = null, modifier = Modifier.fillMaxSize())
         }
         Box(Modifier.fillMaxSize().background(effTint))
-        // диагональный specular sweep (полоса света как на референсе)
-        Box(Modifier.fillMaxSize().background(Brush.linearGradient(listOf(Color(1f,1f,1f,0.16f), Color(1f,1f,1f,0f), Color(1f,1f,1f,0.06f)))))
+        Box(Modifier.fillMaxSize().background(Brush.linearGradient(listOf(Color(1f, 1f, 1f, 0.16f), Color(1f, 1f, 1f, 0f), Color(1f, 1f, 1f, 0.06f)))))
         Box(Modifier.fillMaxSize(), content = content)
     }
 }
 
-// SDF скруглённого прямоугольника -> inward normal -> выпуклая рефракция + RGB-дисперсия + световая кромка
 private fun refractGlass(src: Bitmap, w: Int, h: Int): Bitmap {
     val pix = IntArray(w * h)
     src.getPixels(pix, 0, w, 0, 0, w, h)
     val out = IntArray(w * h)
     val cx = w / 2f; val cy = h / 2f
     val hw = w / 2f; val hh = h / 2f
-    val rad = min(hw, hh)                       // pill-скругление
+    val rad = min(hw, hh)
     val innerW = max(hw - rad, 0f); val innerH = max(hh - rad, 0f)
     val dispMax = REFRACT * rad
     val edgePx = EDGE
-    // свет сверху-слева: inward-normal на левом-верхнем крае ~ (+1,+1)
     val lx = 0.7071f; val ly = 0.7071f
     for (y in 0 until h) {
         val py = y - cy
@@ -197,27 +196,26 @@ private fun refractGlass(src: Bitmap, w: Int, h: Int): Bitmap {
             val dl = sqrt(dx * dx + dy * dy)
             val idx = y * w + x
             if (dl < 1e-3f) { out[idx] = pix[idx]; continue }
-            val nx = -dx / dl                   // inward normal
+            val nx = -dx / dl
             val ny = -dy / dl
             val t = (dl / rad).coerceIn(0f, 1f)
-            val disp = dispMax * t * t          // 0 в центре, макс у края (выпуклость)
+            val disp = dispMax * t * t
             val dr = disp
             val dg = disp * (1f - CHROMA)
             val db = disp * (1f - 2f * CHROMA)
-            var rx = (x + nx * dr).toInt().coerceIn(0, w - 1)
-            var ry = (y + ny * dr).toInt().coerceIn(0, h - 1)
-            var gx = (x + nx * dg).toInt().coerceIn(0, w - 1)
-            var gy = (y + ny * dg).toInt().coerceIn(0, h - 1)
-            var bx = (x + nx * db).toInt().coerceIn(0, w - 1)
-            var by = (y + ny * db).toInt().coerceIn(0, h - 1)
+            val rx = (x + nx * dr).toInt().coerceIn(0, w - 1)
+            val ry = (y + ny * dr).toInt().coerceIn(0, h - 1)
+            val gx = (x + nx * dg).toInt().coerceIn(0, w - 1)
+            val gy = (y + ny * dg).toInt().coerceIn(0, h - 1)
+            val bx = (x + nx * db).toInt().coerceIn(0, w - 1)
+            val by = (y + ny * db).toInt().coerceIn(0, h - 1)
             val vr = (pix[ry * w + rx] shr 16) and 0xFF
             val vg = (pix[gy * w + gx] shr 8) and 0xFF
             val vb = (pix[by * w + bx]) and 0xFF
-            // световая кромка: яркость по близости к границе (dl->rad) и по углу к свету
-            val edgeT = ((dl - (rad - edgePx)) / edgePx).coerceIn(0f, 1f)   // 1 на самой кромке
-            val ang = (nx * lx + ny * ly).coerceIn(0f, 1f)                  // dot inward-light
+            val edgeT = ((dl - (rad - edgePx)) / edgePx).coerceIn(0f, 1f)
+            val ang = (nx * lx + ny * ly).coerceIn(0f, 1f)
             val add = edgeT * (0.30f + 0.70f * ang) * HL
-            val sh = edgeT * (0.55f - 0.55f * ang) * 0.30f                  // мягкая тень с противоположной стороны
+            val sh = edgeT * (0.55f - 0.55f * ang) * 0.30f
             var r = vr + ((255 - vr) * add).toInt()
             var g = vg + ((255 - vg) * add).toInt()
             var b = vb + ((255 - vb) * add).toInt()
@@ -234,7 +232,7 @@ private fun refractGlass(src: Bitmap, w: Int, h: Int): Bitmap {
 
 private fun cpuBlur(src: Bitmap, w: Int, h: Int, radius: Int): Bitmap {
     if (radius <= 0) return src
-    val down = 4
+    val down = 6
     val tw = (w / down).coerceAtLeast(2); val th = (h / down).coerceAtLeast(2)
     val tiny = Bitmap.createScaledBitmap(src, tw, th, true)
     val pix = IntArray(tw * th); tiny.getPixels(pix, 0, tw, 0, 0, tw, th)
