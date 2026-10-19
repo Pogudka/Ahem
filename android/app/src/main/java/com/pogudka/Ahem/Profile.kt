@@ -145,11 +145,11 @@ internal fun ProfileScreen(act: MainActivity) {
     }
     Column(Modifier.fillMaxSize().background(ic(P.bg)).verticalScroll(rememberScrollState())) {
         Row(Modifier.fillMaxWidth().padding(18.dp, 14.dp, 18.dp, 16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(act.profNick.value.ifEmpty { "@" }, color = ic(P.text), fontSize = 22.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+            Text(act.profNick.value.ifEmpty { "@" }, color = ic(P.text), fontSize = 22.sp, fontWeight = FontWeight.Bold, fontFamily = fontUnbounded, modifier = Modifier.weight(1f))
             if (isMe) GlassIconButton(R.drawable.ic_settings) { act.dialog.value = "settings" }
         }
         Row(Modifier.fillMaxWidth().padding(18.dp, 0.dp, 18.dp, 16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Avatar(act.profAvatarB64.value, act.profName.value, 84.dp)
+            AuthorAvatar(target, act.profName.value, 84.dp)
             Spacer(Modifier.width(20.dp))
             StatCol(postsCount, "посты", Modifier.weight(1f))
             StatCol(act.profFollowers.value, "подписчики", Modifier.weight(1f), onClick = { act.dialogArg.value = act.currentProfileTargetId; act.dialog.value = "followers" })
@@ -214,9 +214,10 @@ private fun ProfileGrid(act: MainActivity, grid: List<DataSnapshot>, mode: Int) 
 private fun GridTile(act: MainActivity, p: DataSnapshot, modifier: Modifier = Modifier) {
     val postId = p.key ?: ""
     val txt = p.child("text").getValue(String::class.java) ?: ""
-    val stats = act.statsMap[postId]
+    val ver by act.statsVer
+    val stats = remember(postId, ver) { act.statsMap[postId] }
     val liked = stats?.child("likedBy")?.child(act.currentUserId)?.value != null
-    var media by remember(postId, act.statsVer.value) { mutableStateOf<String?>(null) }
+    var media by remember(postId, ver) { mutableStateOf<String?>(null) }
     LaunchedEffect(postId) {
         try { val s = awaitOnce(act.database.child("postMedia").child(postId)); media = s.getValue(String::class.java) ?: "" } catch (t: Throwable) { media = "" }
     }
@@ -259,7 +260,7 @@ private fun SettingsDialog(act: MainActivity) {
                 .border(1.dp, ic(P.border), RoundedCornerShape(20.dp)).padding(20.dp, 18.dp, 20.dp, 20.dp)
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Настройки", color = ic(P.text), fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                Text("Настройки", color = ic(P.text), fontSize = 18.sp, fontWeight = FontWeight.Bold, fontFamily = fontUnbounded, modifier = Modifier.weight(1f))
                 GlassIconButton(R.drawable.ic_close) { act.dialog.value = null }
             }
             Spacer(Modifier.height(16.dp))
@@ -308,7 +309,7 @@ private fun AccountsDialog(act: MainActivity) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 GlassIconButton(R.drawable.ic_back) { act.dialog.value = "settings" }
                 Spacer(Modifier.width(12.dp))
-                Text("Аккаунты", color = ic(P.text), fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                Text("Аккаунты", color = ic(P.text), fontSize = 18.sp, fontWeight = FontWeight.Bold, fontFamily = fontUnbounded, modifier = Modifier.weight(1f))
             }
             Spacer(Modifier.height(16.dp))
             if (accounts.isEmpty()) Text("Нет сохранённых аккаунтов", color = ic(P.textSec), fontSize = 14.sp)
@@ -348,11 +349,11 @@ private fun EditDialog(act: MainActivity) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 GlassIconButton(R.drawable.ic_close) { act.dialog.value = null }
                 Spacer(Modifier.width(12.dp))
-                Text("Редактировать", color = ic(P.text), fontSize = 17.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                Text("Редактировать", color = ic(P.text), fontSize = 17.sp, fontWeight = FontWeight.Bold, fontFamily = fontUnbounded, modifier = Modifier.weight(1f))
             }
             Spacer(Modifier.height(16.dp))
             Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-                Avatar(act.currentAvatar, act.currentNick, 96.dp)
+                AuthorAvatar(act.currentUserId, act.currentNick, 96.dp)
                 Spacer(Modifier.height(12.dp))
                 OutlineButton("Сменить аватар", Modifier.fillMaxWidth()) {
                     act.startActivityForResult(
@@ -396,7 +397,7 @@ private fun EditField(value: String, hint: String, onChange: (String) -> Unit) {
     ) {
         BasicTextField(
             value = value, onValueChange = onChange,
-            textStyle = TextStyle(color = ic(P.text), fontSize = 15.sp),
+            textStyle = TextStyle(color = ic(P.text), fontSize = 15.sp, fontFamily = fontUbuntuReg),
             modifier = Modifier.fillMaxWidth(),
             decorationBox = { inner -> if (value.isEmpty()) Text(hint, color = ic(P.textSec), fontSize = 15.sp); inner() }
         )
@@ -429,7 +430,7 @@ private fun FollowListDialog(act: MainActivity, followers: Boolean) {
             Row(Modifier.fillMaxWidth().padding(8.dp, 10.dp, 14.dp, 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 GlassIconButton(R.drawable.ic_back) { act.dialog.value = null }
                 Spacer(Modifier.width(12.dp))
-                Text(title.value, color = ic(P.text), fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                Text(title.value, color = ic(P.text), fontSize = 18.sp, fontWeight = FontWeight.Bold, fontFamily = fontUnbounded)
             }
             LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(14.dp, 6.dp, 14.dp, 20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 if (items.isEmpty()) item { Text("Пусто", color = ic(P.textSec), fontSize = 14.sp, modifier = Modifier.padding(4.dp, 20.dp)) }
