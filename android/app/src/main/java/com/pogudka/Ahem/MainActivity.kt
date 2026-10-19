@@ -52,11 +52,11 @@ class MainActivity : ComponentActivity() {
 
     internal val tab = mutableStateOf(0)
     internal val panelVisible = mutableStateOf(true)
-    internal val glassTick = mutableStateOf(0)
     internal val dialog = mutableStateOf<String?>(null)
     internal val dialogArg = mutableStateOf("")
     internal val viewerImages = mutableStateOf<List<String>>(emptyList())
     internal val viewerStart = mutableStateOf(0)
+    internal val refreshing = mutableStateOf(false)
 
     internal var currentNick = ""
     internal var currentEmail = ""
@@ -65,6 +65,11 @@ class MainActivity : ComponentActivity() {
     internal val viewedLocally = HashSet<String>()
     internal val statsMap = HashMap<String, DataSnapshot>()
     internal val statsVer = mutableStateOf(0)
+
+    // оптимистичные оверрайды (мгновенные лайки/просмотры; сервер чистит их в onComplete)
+    internal val optLiked = HashMap<String, Boolean>()
+    internal val optCount = HashMap<String, Long>()
+    internal val optViews = HashMap<String, Long>()
 
     internal val emailInput = mutableStateOf("")
     internal val nickInput = mutableStateOf("")
@@ -127,17 +132,17 @@ class MainActivity : ComponentActivity() {
             viewingUserId = ""; currentProfileTargetId = ""
             chatOpen.value = false; chatPeerUid = ""; chatPeerNick = ""
             myFollowingIds.clear(); viewedLocally.clear(); statsMap.clear(); statsVer.value++
+            optLiked.clear(); optCount.clear(); optViews.clear()
             postsRaw.clear(); pendingImages.clear(); peersList.clear(); chatMsgs.clear()
             profTarget.value = ""; profNick.value = ""; profName.value = ""; profBio.value = ""
             profAvatarB64.value = ""; editAvatarB64.value = ""
             profFollowers.value = 0L; profFollowing.value = 0L
             clearSessionPrefs()
         }
-        glassTick.value++
     }
 
     internal fun showTab(i: Int, keep: Boolean = false) {
-        tab.value = i; panelVisible.value = true; glassTick.value++
+        tab.value = i; panelVisible.value = true
         if (i == 3) { if (!keep) viewingUserId = currentUserId; refreshProfile(this) }
         if (i == 2) loadConversations(this)
     }
@@ -168,8 +173,9 @@ class MainActivity : ComponentActivity() {
                     override fun onDataChange(snapshot: DataSnapshot) {
                         currentNick = snapshot.child("nick").getValue(String::class.java) ?: currentNick.ifEmpty { "Аноним" }
                         currentAvatar = snapshot.child("avatar").getValue(String::class.java) ?: ""
+                        profAvatarB64.value = currentAvatar
                         currentEmail = snapshot.child("email").getValue(String::class.java) ?: currentEmail
-                        saveSessionPrefs(); refreshProfile(this@MainActivity); glassTick.value++
+                        saveSessionPrefs(); refreshProfile(this@MainActivity)
                     }
                     override fun onCancelled(error: DatabaseError) { dbDenied(this@MainActivity, error) }
                 })
@@ -195,8 +201,9 @@ class MainActivity : ComponentActivity() {
 private fun AhemRoot(act: MainActivity) {
     val t by act.tab
     val panel by act.panelVisible
-    val tick by act.glassTick
+    val chatOpen by act.chatOpen
     val icons = intArrayOf(R.drawable.ic_feed, R.drawable.ic_video, R.drawable.ic_chat, R.drawable.ic_profile)
+    val showPanel = panel && !(t == 2 && chatOpen) // в открытом диалоге чата нижней панели нет
     CompositionLocalProvider(LocalTextStyle provides TextStyle(fontFamily = fontUbuntuReg)) {
         Box(Modifier.fillMaxSize().background(ic(P.bg))) {
             when (t) {
@@ -205,10 +212,10 @@ private fun AhemRoot(act: MainActivity) {
                 2 -> ChatScreen(act)
                 3 -> ProfileScreen(act)
             }
-            if (panel) {
+            if (showPanel) {
                 LiquidGlass(
                     modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 12.dp).height(64.dp),
-                    tint = ic(P.navGlass), border = ic(P.border), tick = tick
+                    border = ic(P.border)
                 ) {
                     Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
                         for (i in 0 until 4) {
