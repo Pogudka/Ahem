@@ -4,7 +4,6 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.layout.Arrangement
@@ -24,11 +23,12 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.foundation.pullRefresh
-import androidx.compose.foundation.rememberPullRefreshState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material.ExperimentalMaterialApi
+import androidx.compose.material.pullrefresh.PullRefreshIndicator
+import androidx.compose.material.pullrefresh.pullRefresh
+import androidx.compose.material.pullrefresh.rememberPullRefreshState
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -42,10 +42,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -97,7 +95,7 @@ internal fun toggleLike(act: MainActivity, postId: String) {
     val curCount = act.optCount[postId] ?: serverCount
     val newLiked = !curLiked
     val newCount = (curCount + if (newLiked) 1 else -1).coerceAtLeast(0L)
-    act.optLiked[postId] = newLiked; act.optCount[postId] = newCount; act.statsVer.value++ // мгновенно
+    act.optLiked[postId] = newLiked; act.optCount[postId] = newCount; act.statsVer.value++
     txWithRetry(act.database.child("postStats").child(postId), act, 3, { md ->
         val likes = (md.child("likes").value as? Number)?.toLong() ?: 0L
         val lb = md.child("likedBy")
@@ -112,7 +110,7 @@ internal fun toggleLike(act: MainActivity, postId: String) {
     }) { committed, data, _ ->
         if (committed && data != null) {
             act.statsMap[postId] = data
-            act.optLiked.remove(postId); act.optCount.remove(postId) // сервер авторитетен
+            act.optLiked.remove(postId); act.optCount.remove(postId)
             act.statsVer.value++
         }
     }
@@ -139,7 +137,7 @@ internal fun incViews(act: MainActivity, postId: String) {
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalMaterialApi::class)
 @Composable
 internal fun FeedScreen(act: MainActivity) {
     val me by act.sessionUid
@@ -188,13 +186,7 @@ internal fun FeedScreen(act: MainActivity) {
                     }
                     items(sorted, key = { it.key ?: "" }) { p -> PostCard(act, p) }
                 }
-                val dens = LocalDensity.current
-                val topPad = with(dens) { pr.distance.toDp().coerceAtMost(72.dp) }
-                if (pr.distance > 1f || act.refreshing.value) {
-                    Box(Modifier.align(Alignment.TopCenter).padding(top = topPad)) {
-                        CircularProgressIndicator(modifier = Modifier.size(32.dp), color = ic(P.textSec), strokeWidth = 3.dp)
-                    }
-                }
+                PullRefreshIndicator(pr, listState, Modifier.align(Alignment.TopCenter))
             }
         }
     }
@@ -430,21 +422,14 @@ internal fun ViewerDialog(act: MainActivity) {
     }
 }
 
-// зум якорится в точку щипка + панорамирование (transformable), а не только центр
 @Composable
 private fun ZoomImage(b64: String) {
     val ctx = LocalContext.current
     val req = maxOf(ctx.resources.displayMetrics.widthPixels, ctx.resources.displayMetrics.heightPixels)
     val shown = rememberDecoded(b64, req)
-    val tm = rememberTransformableState { zoomChange, panChange, _ -> }
-    Box(
-        Modifier.fillMaxSize().transformable(tm),
-        contentAlignment = Alignment.Center
-    ) {
-        if (shown != null) Image(
-            bitmap = shown.asImageBitmap(), contentDescription = null, contentScale = ContentScale.Fit,
-            modifier = Modifier.fillMaxSize()
-        )
+    val tm = rememberTransformableState { zoomChange, panChange, rotationChange -> }
+    Box(Modifier.fillMaxSize().transformable(tm), contentAlignment = Alignment.Center) {
+        if (shown != null) Image(bitmap = shown.asImageBitmap(), contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
     }
 }
 
