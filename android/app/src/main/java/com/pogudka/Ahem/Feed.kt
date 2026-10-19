@@ -78,7 +78,6 @@ internal fun loadFeed(act: MainActivity, onDone: (() -> Unit)? = null) {
 }
 
 internal fun enterFeedMode(act: MainActivity) {
-    act.authScreen.value = false
     loadFeed(act)
     scheduleMigration(act)
 }
@@ -124,10 +123,12 @@ internal fun incViews(act: MainActivity, postId: String) {
 
 @Composable
 internal fun FeedScreen(act: MainActivity) {
-    val authed by act.authScreen
+    val me by act.sessionUid
     val query by act.feedQuery
     Column(Modifier.fillMaxSize().background(ic(P.bg))) {
-        if (authed) {
+        if (me.isEmpty()) {
+            AuthForm(act)
+        } else {
             Row(Modifier.fillMaxWidth().padding(18.dp, 14.dp, 18.dp, 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("Ahem", color = ic(P.text), fontSize = 20.sp, fontWeight = FontWeight.Bold)
             }
@@ -161,8 +162,6 @@ internal fun FeedScreen(act: MainActivity) {
                 }
                 items(sorted) { p -> PostCard(act, p) }
             }
-        } else {
-            AuthForm(act)
         }
     }
 }
@@ -482,7 +481,8 @@ private fun doRegister(act: MainActivity) {
                 val userId = act.auth.currentUser?.uid ?: return@addOnCompleteListener
                 act.database.child("users").child(userId).child("email").setValue(email)
                 act.database.child("users").child(userId).child("nick").setValue(nick)
-                act.currentUserId = userId; act.currentNick = nick; act.currentEmail = email; act.viewingUserId = userId
+                act.setSession(userId)
+                act.currentNick = nick; act.currentEmail = email; act.viewingUserId = userId
                 saveAccount(act, userId, nick, email, pass)
                 act.saveSessionPrefs()
                 enterFeedMode(act)
@@ -504,7 +504,8 @@ private fun doLogin(act: MainActivity) {
         act.isLoggingIn = false
         if (task.isSuccessful) {
             val userId = act.auth.currentUser?.uid ?: return@addOnCompleteListener
-            act.currentUserId = userId; act.currentEmail = email; act.viewingUserId = userId
+            act.setSession(userId)
+            act.currentEmail = email; act.viewingUserId = userId
             enterFeedMode(act)
             loadMyFollowing(act) {}
             act.database.child("users").child(userId).addListenerForSingleValueEvent(object : ValueEventListener {
