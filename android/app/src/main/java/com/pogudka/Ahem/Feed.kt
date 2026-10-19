@@ -42,6 +42,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -186,7 +187,13 @@ internal fun FeedScreen(act: MainActivity) {
                     }
                     items(sorted, key = { it.key ?: "" }) { p -> PostCard(act, p) }
                 }
-                PullRefreshIndicator(pr, listState, Modifier.align(Alignment.TopCenter))
+                PullRefreshIndicator(
+                    refreshing = act.refreshing.value,
+                    state = pr,
+                    modifier = Modifier.align(Alignment.TopCenter),
+                    backgroundColor = ic(P.surface),
+                    contentColor = ic(P.textSec)
+                )
             }
         }
     }
@@ -428,8 +435,14 @@ private fun ZoomImage(b64: String) {
     val req = maxOf(ctx.resources.displayMetrics.widthPixels, ctx.resources.displayMetrics.heightPixels)
     val shown = rememberDecoded(b64, req)
     val tm = rememberTransformableState { zoomChange, panChange, rotationChange -> }
-    Box(Modifier.fillMaxSize().transformable(tm), contentAlignment = Alignment.Center) {
-        if (shown != null) Image(bitmap = shown.asImageBitmap(), contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        if (shown != null) Image(
+            bitmap = shown.asImageBitmap(), contentDescription = null, contentScale = ContentScale.Fit,
+            modifier = Modifier.fillMaxSize().transformable(tm).graphicsLayer {
+                scaleX = tm.zoom; scaleY = tm.zoom
+                translationX = tm.pan.x; translationY = tm.pan.y
+            }
+        )
     }
 }
 
