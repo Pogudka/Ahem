@@ -5,7 +5,6 @@ import android.graphics.Typeface
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.view.View
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
@@ -42,7 +41,12 @@ class MainActivity : ComponentActivity() {
     internal lateinit var auth: FirebaseAuth
     internal lateinit var database: DatabaseReference
 
-    // nav / dialogs
+    // ЕДИНЫЙ источник истины о сессии. currentUserId держим в sync с ним для firebase-логики.
+    internal val sessionUid = mutableStateOf("")
+    internal var currentUserId: String
+        get() = sessionUid.value
+        set(v) { sessionUid.value = v }
+
     internal val tab = mutableStateOf(0)
     internal val panelVisible = mutableStateOf(true)
     internal val glassTick = mutableStateOf(0)
@@ -51,8 +55,6 @@ class MainActivity : ComponentActivity() {
     internal val viewerImages = mutableStateOf<List<String>>(emptyList())
     internal val viewerStart = mutableStateOf(0)
 
-    // identity
-    internal var currentUserId = ""
     internal var currentNick = ""
     internal var currentEmail = ""
     internal var currentAvatar = ""
@@ -61,16 +63,13 @@ class MainActivity : ComponentActivity() {
     internal val statsMap = HashMap<String, DataSnapshot>()
     internal val statsVer = mutableStateOf(0)
 
-    // auth screen
-    internal val authScreen = mutableStateOf(true)
     internal val emailInput = mutableStateOf("")
     internal val nickInput = mutableStateOf("")
     internal val passInput = mutableStateOf("")
-    internal val feedStatus = mutableStateOf("не залогинен")
+    internal val feedStatus = mutableStateOf("")
     internal var isRegistering = false
     internal var isLoggingIn = false
 
-    // feed
     internal val postsRaw = mutableStateListOf<DataSnapshot>()
     internal val feedQuery = mutableStateOf("")
     internal val pendingImages = mutableStateListOf<String>()
@@ -78,24 +77,17 @@ class MainActivity : ComponentActivity() {
     internal var migrationScheduled = false
     internal var migrationRunning = false
 
-    // profile
     internal val profTarget = mutableStateOf("")
     internal val profNick = mutableStateOf("")
     internal val profName = mutableStateOf("")
     internal val profBio = mutableStateOf("")
     internal val profAvatarB64 = mutableStateOf("")
-    internal val profPosts = mutableStateOf(0L)
     internal val profFollowers = mutableStateOf(0L)
     internal val profFollowing = mutableStateOf(0L)
-    internal val profLikes = mutableStateOf(0L)
-    internal val profMode = mutableStateOf(0)
-    internal val profGrid = mutableStateListOf<DataSnapshot>()
-    internal val editAvatarB64 = mutableStateOf("")
     internal var viewingUserId = ""
     internal var currentProfileTargetId = ""
     internal var profileGen = 0
 
-    // chat
     internal val chatOpen = mutableStateOf(false)
     internal var chatPeerUid = ""
     internal var chatPeerNick = ""
@@ -117,9 +109,27 @@ class MainActivity : ComponentActivity() {
     internal fun setNavVisible(v: Boolean) { panelVisible.value = v }
     internal fun saveSessionPrefs() { getSharedPreferences("ahem", Context.MODE_PRIVATE).edit().putString("last_uid", currentUserId).putString("last_nick", currentNick).putString("last_email", currentEmail).apply() }
     internal fun clearSessionPrefs() { getSharedPreferences("ahem", Context.MODE_PRIVATE).edit().remove("last_uid").remove("last_nick").remove("last_email").apply() }
+
+    // атомарная смена сессии + полный сброс зависимых состояний (чинит гонку и «самому себе»)
+    internal fun setSession(uid: String) {
+        currentUserId = uid
+        if (uid.isEmpty()) {
+            currentNick = ""; currentEmail = ""; currentAvatar = ""
+            viewingUserId = ""; currentProfileTargetId = ""
+            chatOpen.value = false; chatPeerUid = ""; chatPeerNick = ""
+            myFollowingIds.clear(); viewedLocally.clear(); statsMap.clear(); statsVer.value++
+            postsRaw.clear(); pendingImages.clear(); peersList.clear(); chatMsgs.clear()
+            profTarget.value = ""; profNick.value = ""; profName.value = ""; profBio.value = ""; profAvatarB64.value = ""
+            profFollowers.value = 0L; profFollowing.value = 0L
+            clearSessionPrefs()
+        }
+        glassTick.value++
+    }
+
     internal fun showTab(i: Int, keep: Boolean = false) {
         tab.value = i; panelVisible.value = true; glassTick.value++
-        if (i == 3) { if (!keep) { viewingUserId = currentUserId; profileGen = 0 }; refreshProfile(this) }
+        if (i == 3) { if (!keep) viewingUserId = currentUserId; refreshProfile(this) }
+        if (i == 2) loadConversations(this)
     }
 
     private var authListener: FirebaseAuth.AuthStateListener? = null
@@ -137,14 +147,14 @@ class MainActivity : ComponentActivity() {
         authListener = FirebaseAuth.AuthStateListener { firebaseAuth ->
             val user = firebaseAuth.currentUser
             if (user != null && currentUserId.isEmpty()) {
-                currentUserId = user.uid; viewingUserId = currentUserId
+                setSession(user.uid)
+                viewingUserId = user.uid
                 val prefs = getSharedPreferences("ahem", Context.MODE_PRIVATE)
                 val pn = prefs.getString("last_nick", "") ?: ""; val pe = prefs.getString("last_email", "") ?: ""
                 if (pn.isNotEmpty()) currentNick = pn; if (pe.isNotEmpty()) currentEmail = pe
-                authScreen.value = false
                 loadMyFollowing(this) {}
                 enterFeedMode(this)
-                database.child("users").child(currentUserId).addListenerForSingleValueEvent(object : ValueEventListener {
+                database.child("users").child(user.uid).addListenerForSingleValueEvent(object : ValueEventListener {
                     override fun onDataChange(snapshot: DataSnapshot) {
                         currentNick = snapshot.child("nick").getValue(String::class.java) ?: currentNick.ifEmpty { "Аноним" }
                         currentAvatar = snapshot.child("avatar").getValue(String::class.java) ?: ""
@@ -154,11 +164,7 @@ class MainActivity : ComponentActivity() {
                     override fun onCancelled(error: DatabaseError) { dbDenied(this@MainActivity, error) }
                 })
             } else if (user == null && currentUserId.isNotEmpty()) {
-                currentUserId = ""; currentNick = ""; currentEmail = ""; currentAvatar = ""
-                viewingUserId = ""; chatOpen.value = false; chatPeerUid = ""; chatPeerNick = ""
-                myFollowingIds.clear(); viewedLocally.clear(); statsMap.clear(); statsVer.value++
-                postsRaw.clear(); pendingImages.clear(); profGrid.clear(); peersList.clear(); chatMsgs.clear()
-                clearSessionPrefs(); authScreen.value = true; feedStatus.value = "не залогинен"
+                setSession("")
             }
         }
         auth.addAuthStateListener(authListener!!)
