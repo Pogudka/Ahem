@@ -23,11 +23,12 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.foundation.pullToRefresh
-import androidx.compose.foundation.pullToRefreshState
-import androidx.compose.foundation.rememberPullToRefreshState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material.ExperimentalMaterialApi
+import androidx.compose.material.pullrefresh.PullRefreshState
+import androidx.compose.material.pullrefresh.pullRefresh
+import androidx.compose.material.pullrefresh.rememberPullRefreshState
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -39,13 +40,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.graphicsLayer
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -144,13 +145,17 @@ internal fun incViews(act: MainActivity, postId: String) {
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalMaterialApi::class)
 @Composable
 internal fun FeedScreen(act: MainActivity) {
     val me by act.sessionUid
     val query by act.feedQuery
     val listState = rememberLazyListState()
-    val ptr = rememberPullToRefreshState(distanceThreshold = 150.dp)
+    val pr = rememberPullRefreshState(
+        refreshing = act.refreshing.value,
+        onRefresh = { act.refreshing.value = true; loadFeed(act) { act.refreshing.value = false } },
+        refreshOffset = 150.dp
+    )
     Column(Modifier.fillMaxSize().background(ic(P.bg))) {
         if (me.isEmpty()) {
             AuthForm(act)
@@ -172,18 +177,7 @@ internal fun FeedScreen(act: MainActivity) {
                     }
                 }
                 .take(act.FEED_LIMIT)
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .pullToRefresh(
-                        state = ptr,
-                        isRefreshing = act.refreshing.value,
-                        onRefresh = {
-                            act.refreshing.value = true
-                            loadFeed(act) { act.refreshing.value = false }
-                        }
-                    )
-            ) {
+            Box(Modifier.fillMaxSize().pullRefresh(pr)) {
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.fillMaxSize(),
@@ -201,27 +195,25 @@ internal fun FeedScreen(act: MainActivity) {
                     }
                     items(sorted, key = { it.key ?: "" }) { p -> PostCard(act, p) }
                 }
-                RefreshIndicator(ptr, act.refreshing.value, Modifier.align(Alignment.TopCenter))
+                RefreshIndicator(pr, act.refreshing.value, Modifier.align(Alignment.TopCenter))
             }
         }
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalMaterialApi::class)
 @Composable
-private fun RefreshIndicator(ptr: PullToRefreshState, refreshing: Boolean, modifier: Modifier = Modifier) {
-    val thresholdPx = with(LocalDensity.current) { 150.dp.toPx() }
-    val pullPx = with(LocalDensity.current) { ptr.pullDistance.toPx() }
-    val prog = (pullPx / thresholdPx).coerceIn(0f, 1f)
+private fun RefreshIndicator(pr: PullRefreshState, refreshing: Boolean, modifier: Modifier = Modifier) {
+    val prog = pr.progress.coerceIn(0f, 1f)
     val visible = prog > 0.01f || refreshing
-    val topDp = with(LocalDensity.current) { (pullPx * 0.5f).toDp() }
+    val top = with(LocalDensity.current) { (prog * 56f).toDp() }
     var spin by remember { mutableStateOf(0f) }
     LaunchedEffect(refreshing) {
         if (refreshing) { while (true) { delay(16L); spin = (spin + 14f) % 360f } }
     }
     if (visible) {
         val rot = if (refreshing) spin else prog * 270f
-        Box(modifier.padding(top = topDp + 8.dp), contentAlignment = Alignment.Center) {
+        Box(modifier.padding(top = top + 10.dp), contentAlignment = Alignment.Center) {
             Icon(
                 painter = painterResource(R.drawable.ic_refresh),
                 contentDescription = null,
@@ -469,7 +461,7 @@ internal fun ViewerDialog(act: MainActivity) {
     }
 }
 
-// пинч 2 пальцами = зум ровно под палец (graphicsLayer.transformOrigin из центроида),
+// пинч 2 пальцами = зум ровно под палец (transformOrigin из центроида жеста),
 // свайп 1 пальцем при scale==1 уходит HorizontalPager = перемотка фото, двойной тап = in/out.
 @Composable
 private fun ZoomImage(b64: String) {
@@ -513,8 +505,10 @@ private fun ZoomImage(b64: String) {
             contentDescription = null,
             contentScale = ContentScale.Fit,
             modifier = Modifier.fillMaxSize().graphicsLayer {
-                scaleX = scale; scaleY = scale
-                translationX = pan.x; translationY = pan.y
+                scaleX = scale
+                scaleY = scale
+                translationX = pan.x
+                translationY = pan.y
                 transformOrigin = TransformOrigin(ox, oy)
                 clip = false
             }
