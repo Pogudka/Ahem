@@ -153,8 +153,7 @@ internal fun FeedScreen(act: MainActivity) {
     val listState = rememberLazyListState()
     val pr = rememberPullRefreshState(
         refreshing = act.refreshing.value,
-        onRefresh = { act.refreshing.value = true; loadFeed(act) { act.refreshing.value = false } },
-        refreshOffset = 150.dp
+        onRefresh = { act.refreshing.value = true; loadFeed(act) { act.refreshing.value = false } }
     )
     Column(Modifier.fillMaxSize().background(ic(P.bg))) {
         if (me.isEmpty()) {
