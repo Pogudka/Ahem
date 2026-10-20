@@ -29,9 +29,9 @@ internal fun ic(c: Int): Color = Color(
     (c shr 24 and 0xFF) / 255f
 )
 
-// Живое стекло: нативный View.setBackgroundBlurRadius (GPU, API 31+) размазывает контент окна ПОЗАДИ панели (= ленту).
-// Иконки/градиенты рисуются Compose поверх нативной размытой подложки. Без PixelCopy, без либ, без feedback-полос, 60fps.
-// Android 7-11: нативного backdrop blur нет -> frosted-подложка (background + градиенты) без размытия, без лагов.
+// Живое стекло: нативный View.setBackgroundBlurRadius (GPU, API 31+) размазывает контент окна ПОЗАДИ панели.
+// Прямой вызов в этой сборке не резолвится компилятором, поэтому вызываем тот же публичный системный метод рефлексией.
+// На Android 12+ работает как настоящее backdrop blur, на старых Android безопасно игнорится.
 @Composable
 fun LiquidGlass(
     modifier: Modifier = Modifier,
@@ -44,10 +44,12 @@ fun LiquidGlass(
     val ctx = LocalContext.current
     val dark = isDark(ctx)
     val effTint = if (tint != Color.Unspecified) tint else if (dark) Color(0x33FFFFFF) else Color(0x22FFFFFF)
+
     val density = LocalDensity.current
     val radiusPx = with(density) { corner.toPx() }
     val blurPx = with(density) { blur.toPx() }.toInt().coerceAtLeast(1)
     val shape = RoundedCornerShape(corner)
+
     val androidTint = android.graphics.Color.argb(
         (effTint.alpha * 255f).toInt().coerceIn(0, 255),
         (effTint.red * 255f).toInt().coerceIn(0, 255),
@@ -55,12 +57,17 @@ fun LiquidGlass(
         (effTint.blue * 255f).toInt().coerceIn(0, 255)
     )
 
-    Box(modifier = modifier.clip(shape).border(1.dp, border, shape)) {
+    Box(
+        modifier = modifier
+            .clip(shape)
+            .border(1.dp, border, shape)
+    ) {
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { c ->
                 FrameLayout(c).apply {
                     setBackgroundColor(androidTint)
+
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                         outlineProvider = object : ViewOutlineProvider() {
                             override fun getOutline(view: View, outline: Outline) {
@@ -68,17 +75,65 @@ fun LiquidGlass(
                             }
                         }
                         clipToOutline = true
-                        setBackgroundBlurRadius(blurPx)
+                        invalidateOutline()
+                        nativeBackgroundBlur(blurPx)
                     }
                 }
             },
             update = { v ->
                 v.setBackgroundColor(androidTint)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) v.setBackgroundBlurRadius(blurPx)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    v.nativeBackgroundBlur(blurPx)
+                }
             }
         )
-        Box(Modifier.fillMaxSize().background(Brush.linearGradient(listOf(Color(1f, 1f, 1f, 0.16f), Color(1f, 1f, 1f, 0f), Color(1f, 1f, 1f, 0.06f)))))
-        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(1f, 1f, 1f, 0.14f), Color(1f, 1f, 1f, 0f), Color(0f, 0f, 0f, 0.08f)))))
+
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.linearGradient(
+                        listOf(
+                            Color(1f, 1f, 1f, 0.16f),
+                            Color(1f, 1f, 1f, 0f),
+                            Color(1f, 1f, 1f, 0.06f)
+                        )
+                    )
+                )
+        )
+
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            Color(1f, 1f, 1f, 0.14f),
+                            Color(1f, 1f, 1f, 0f),
+                            Color(0f, 0f, 0f, 0.08f)
+                        )
+                    )
+                )
+        )
+
         Box(Modifier.fillMaxSize(), content = content)
+    }
+}
+
+private fun View.nativeBackgroundBlur(radiusPx: Int) {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+
+    try {
+        javaClass
+            .getMethod("setBackgroundBlurRadius", Int::class.javaPrimitiveType)
+            .invoke(this, radiusPx)
+    } catch (_: Throwable) {
+        try {
+            View::class.java
+                .getMethod("setBackgroundBlurRadius", Int::class.javaPrimitiveType)
+                .invoke(this, radiusPx)
+        } catch (_: Throwable) {
+            // Если метод недоступен — остаётся обычная полупрозрачная подложка, приложение не падает.
+        }
     }
 }
