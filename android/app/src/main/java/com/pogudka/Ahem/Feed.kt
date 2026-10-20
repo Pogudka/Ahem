@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -24,12 +23,11 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.pullToRefresh
+import androidx.compose.foundation.pullToRefreshState
+import androidx.compose.foundation.rememberPullToRefreshState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.material.ExperimentalMaterialApi
-import androidx.compose.material.pullrefresh.PullRefreshState
-import androidx.compose.material.pullrefresh.pullRefresh
-import androidx.compose.material.pullrefresh.rememberPullRefreshState
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -38,14 +36,15 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.graphicsLayer
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -65,8 +64,6 @@ import com.google.firebase.database.MutableData
 import com.google.firebase.database.Transaction
 import com.google.firebase.database.ValueEventListener
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.debounce
-import kotlinx.coroutines.flow.distinctUntilChanged
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -147,22 +144,13 @@ internal fun incViews(act: MainActivity, postId: String) {
     }
 }
 
-@OptIn(ExperimentalMaterialApi::class)
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun FeedScreen(act: MainActivity) {
     val me by act.sessionUid
     val query by act.feedQuery
     val listState = rememberLazyListState()
-    val pr = rememberPullRefreshState(
-        refreshing = act.refreshing.value,
-        onRefresh = { act.refreshing.value = true; loadFeed(act) { act.refreshing.value = false } }
-    )
-    LaunchedEffect(Unit) {
-        snapshotFlow { listState.firstVisibleItemIndex to (listState.firstVisibleItemScrollOffset / 300) }
-            .distinctUntilChanged()
-            .debounce(300L)
-            .collect { act.feedScrollTick.value++ }
-    }
+    val ptr = rememberPullToRefreshState(distanceThreshold = 150.dp)
     Column(Modifier.fillMaxSize().background(ic(P.bg))) {
         if (me.isEmpty()) {
             AuthForm(act)
@@ -184,7 +172,18 @@ internal fun FeedScreen(act: MainActivity) {
                     }
                 }
                 .take(act.FEED_LIMIT)
-            Box(Modifier.fillMaxSize().pullRefresh(pr)) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .pullToRefresh(
+                        state = ptr,
+                        isRefreshing = act.refreshing.value,
+                        onRefresh = {
+                            act.refreshing.value = true
+                            loadFeed(act) { act.refreshing.value = false }
+                        }
+                    )
+            ) {
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.fillMaxSize(),
@@ -202,26 +201,27 @@ internal fun FeedScreen(act: MainActivity) {
                     }
                     items(sorted, key = { it.key ?: "" }) { p -> PostCard(act, p) }
                 }
-                RefreshIndicator(pr, act.refreshing.value, Modifier.align(Alignment.TopCenter))
+                RefreshIndicator(ptr, act.refreshing.value, Modifier.align(Alignment.TopCenter))
             }
         }
     }
 }
 
-@OptIn(ExperimentalMaterialApi::class)
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun RefreshIndicator(pr: PullRefreshState, refreshing: Boolean, modifier: Modifier = Modifier) {
-    val prog = pr.progress.coerceIn(0f, 1f)
+private fun RefreshIndicator(ptr: PullToRefreshState, refreshing: Boolean, modifier: Modifier = Modifier) {
+    val thresholdPx = with(LocalDensity.current) { 150.dp.toPx() }
+    val pullPx = with(LocalDensity.current) { ptr.pullDistance.toPx() }
+    val prog = (pullPx / thresholdPx).coerceIn(0f, 1f)
     val visible = prog > 0.01f || refreshing
-    val dens = LocalDensity.current
-    val top = with(dens) { (prog * 56f).toDp() }
+    val topDp = with(LocalDensity.current) { (pullPx * 0.5f).toDp() }
     var spin by remember { mutableStateOf(0f) }
     LaunchedEffect(refreshing) {
         if (refreshing) { while (true) { delay(16L); spin = (spin + 14f) % 360f } }
     }
     if (visible) {
         val rot = if (refreshing) spin else prog * 270f
-        Box(modifier.padding(top = top + 10.dp), contentAlignment = Alignment.Center) {
+        Box(modifier.padding(top = topDp + 8.dp), contentAlignment = Alignment.Center) {
             Icon(
                 painter = painterResource(R.drawable.ic_refresh),
                 contentDescription = null,
@@ -469,28 +469,41 @@ internal fun ViewerDialog(act: MainActivity) {
     }
 }
 
+// пинч 2 пальцами = зум ровно под палец (graphicsLayer.transformOrigin из центроида),
+// свайп 1 пальцем при scale==1 уходит HorizontalPager = перемотка фото, двойной тап = in/out.
 @Composable
 private fun ZoomImage(b64: String) {
     val ctx = LocalContext.current
     val req = maxOf(ctx.resources.displayMetrics.widthPixels, ctx.resources.displayMetrics.heightPixels)
     val shown = rememberDecoded(b64, req)
-    val dens = LocalDensity.current
     var scale by remember(b64) { mutableStateOf(1f) }
     var pan by remember(b64) { mutableStateOf(Offset.Zero) }
+    var ox by remember(b64) { mutableStateOf(0.5f) }
+    var oy by remember(b64) { mutableStateOf(0.5f) }
     Box(
-        Modifier.fillMaxSize()
+        Modifier
+            .fillMaxSize()
             .pointerInput(b64) {
                 detectTapGestures(onDoubleTap = {
-                    if (scale > 1.05f) { scale = 1f; pan = Offset.Zero } else { scale = 2.5f; pan = Offset.Zero }
+                    if (scale > 1.05f) { scale = 1f; pan = Offset.Zero; ox = 0.5f; oy = 0.5f }
+                    else { scale = 2.5f; pan = Offset.Zero; ox = it.x / size.width; oy = it.y / size.height }
                 })
             }
             .pointerInput(b64) {
-                detectTransformGestures { _, panBy, zoom, _ ->
-                    val multiTouch = zoom < 0.999f || zoom > 1.001f
-                    if (scale > 1.02f || multiTouch) {
-                        val ns = (scale * zoom).coerceIn(1f, 4f)
-                        if (ns > 1.02f) { pan += panBy; scale = ns } else { scale = 1f; pan = Offset.Zero }
+                detectTransformGestures { centroid, panBy, zoom, _ ->
+                    val old = scale
+                    val ns = (old * zoom).coerceIn(1f, 4f)
+                    pan += panBy
+                    if (old > 0f && ns != old) {
+                        val ratio = ns / old
+                        pan += (centroid - pan) * (1f - ratio)
                     }
+                    scale = ns
+                    if (centroid.x in 0f..size.width.toFloat() && centroid.y in 0f..size.height.toFloat()) {
+                        ox = (centroid.x / size.width).coerceIn(0f, 1f)
+                        oy = (centroid.y / size.height).coerceIn(0f, 1f)
+                    }
+                    if (scale <= 1.02f) { scale = 1f; pan = Offset.Zero; ox = 0.5f; oy = 0.5f }
                 }
             },
         contentAlignment = Alignment.Center
@@ -499,7 +512,12 @@ private fun ZoomImage(b64: String) {
             bitmap = shown.asImageBitmap(),
             contentDescription = null,
             contentScale = ContentScale.Fit,
-            modifier = Modifier.fillMaxSize().scale(scale).offset(with(dens) { pan.x.toDp() }, with(dens) { pan.y.toDp() })
+            modifier = Modifier.fillMaxSize().graphicsLayer {
+                scaleX = scale; scaleY = scale
+                translationX = pan.x; translationY = pan.y
+                transformOrigin = TransformOrigin(ox, oy)
+                clip = false
+            }
         )
     }
 }
