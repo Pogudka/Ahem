@@ -3,6 +3,7 @@ package com.pogudka.Ahem
 import android.content.Context
 import android.content.Intent
 import android.graphics.Typeface
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -35,6 +36,8 @@ import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.DatabaseReference
 import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.database.ValueEventListener
+import dev.chrisbanes.haze.hazeSource
+import dev.chrisbanes.haze.rememberHazeState
 
 internal const val DB_URL = ""
 
@@ -45,9 +48,7 @@ class MainActivity : ComponentActivity() {
     internal lateinit var auth: FirebaseAuth
     internal lateinit var database: DatabaseReference
 
-    // snapshot-кэш аватаров: запись дёргает recompose всех читающих -> смена аватара видна сразу везде
     internal val avatarCache = mutableStateOf(HashMap<String, String>())
-    // обычный кэш медиа (рекомпоуз не нужен, локальные state рулят)
     internal val mediaCache = HashMap<String, String>()
 
     internal val sessionUid = mutableStateOf("")
@@ -208,21 +209,29 @@ private fun AhemRoot(act: MainActivity) {
     val t by act.tab
     val panel by act.panelVisible
     val chatOpen by act.chatOpen
-    val tick by act.feedScrollTick
     val icons = intArrayOf(R.drawable.ic_feed, R.drawable.ic_video, R.drawable.ic_chat, R.drawable.ic_profile)
     val showPanel = panel && !(t == 2 && chatOpen)
+    val hazeState = rememberHazeState()
+    val canBlur = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
     CompositionLocalProvider(LocalTextStyle provides TextStyle(fontFamily = fontUbuntuReg)) {
         Box(Modifier.fillMaxSize().background(ic(P.bg))) {
-            when (t) {
-                0 -> FeedScreen(act)
-                1 -> VideoScreen()
-                2 -> ChatScreen(act)
-                3 -> ProfileScreen(act)
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .then(if (canBlur) Modifier.hazeSource(hazeState) else Modifier)
+            ) {
+                when (t) {
+                    0 -> FeedScreen(act)
+                    1 -> VideoScreen()
+                    2 -> ChatScreen(act)
+                    3 -> ProfileScreen(act)
+                }
             }
             if (showPanel) {
                 LiquidGlass(
                     modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 12.dp).height(64.dp),
-                    border = ic(P.border), tabKey = t, tick = tick
+                    border = ic(P.border),
+                    hazeState = if (canBlur) hazeState else null
                 ) {
                     Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
                         for (i in 0 until 4) {
