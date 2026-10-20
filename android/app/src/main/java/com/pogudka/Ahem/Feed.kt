@@ -155,11 +155,8 @@ internal fun FeedScreen(act: MainActivity) {
     val listState = rememberLazyListState()
     val pr = rememberPullRefreshState(
         refreshing = act.refreshing.value,
-        onRefresh = { act.refreshing.value = true; loadFeed(act) { act.refreshing.value = false } },
-        refreshThreshold = 150.dp
+        onRefresh = { act.refreshing.value = true; loadFeed(act) { act.refreshing.value = false } }
     )
-    // СКРОЛЛ-СОСТОЯНИЕ ЧИТАЕТСЯ ТОЛЬКО ВНУТРИ snapshotFlow (не в теле композиции) -> FeedScreen НЕ реконспицируется при скролле = 60fps.
-    // debounce -> тик стекла только ПОСЛЕ остановки ленты, в движении ноль пересъёмов.
     LaunchedEffect(Unit) {
         snapshotFlow { listState.firstVisibleItemIndex to (listState.firstVisibleItemScrollOffset / 300) }
             .distinctUntilChanged()
@@ -211,7 +208,6 @@ internal fun FeedScreen(act: MainActivity) {
     }
 }
 
-// виден ТОЛЬКО при тяге/refresh; 30dp; при тяге крутится по прогрессу, при refresh — бесконечно (спит в покое)
 @OptIn(ExperimentalMaterialApi::class)
 @Composable
 private fun RefreshIndicator(pr: PullRefreshState, refreshing: Boolean, modifier: Modifier = Modifier) {
@@ -473,9 +469,6 @@ internal fun ViewerDialog(act: MainActivity) {
     }
 }
 
-// свайп 1 пальцем = перемотка (pager), пинч 2 пальцами = зум, двойной тап = in/out.
-// detectTransformGestures висит всегда, но ТРОГАЕТ картинку только при мультитаче (zoom!=1) или уже в зуме;
-// при одном пальце и scale==1 не потребляет жест -> HorizontalPager листает чисто.
 @Composable
 private fun ZoomImage(b64: String) {
     val ctx = LocalContext.current
