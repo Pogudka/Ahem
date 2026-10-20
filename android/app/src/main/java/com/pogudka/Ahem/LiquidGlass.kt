@@ -12,8 +12,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import dev.chrisbanes.haze.ExperimentalHazeApi
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.hazeEffect
 
@@ -24,6 +26,7 @@ internal fun ic(c: Int): Color = Color(
     (c shr 24 and 0xFF) / 255f
 )
 
+@OptIn(ExperimentalHazeApi::class)
 @Composable
 fun LiquidGlass(
     modifier: Modifier = Modifier,
@@ -33,7 +36,7 @@ fun LiquidGlass(
     hazeState: HazeState? = null,
     content: @Composable BoxScope.() -> Unit
 ) {
-    val dark = isDark(androidx.compose.ui.platform.LocalContext.current)
+    val dark = isDark(LocalContext.current)
     val effTint = if (tint != Color.Unspecified) tint else if (dark) Color(0x1FFFFFFF) else Color(0x14FFFFFF)
     val shape = RoundedCornerShape(corner)
 
