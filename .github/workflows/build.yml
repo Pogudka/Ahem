@@ -17,13 +17,6 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Probe Haze API
-        run: |
-          cd android
-          gradle wrapper --gradle-version 8.9
-          chmod +x gradlew
-          ./gradlew hazeProbe --no-daemon || true
-
       - name: Build APK
         run: |
           cd android
