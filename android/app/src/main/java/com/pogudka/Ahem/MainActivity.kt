@@ -207,14 +207,12 @@ private fun AhemRoot(act: MainActivity) {
     val t by act.tab
     val panel by act.panelVisible
     val chatOpen by act.chatOpen
-    val tick by act.feedScrollTick
     val dlg by act.dialog
     val pt by act.profTarget
     val me by act.sessionUid
     val icons = intArrayOf(R.drawable.ic_feed, R.drawable.ic_video, R.drawable.ic_chat, R.drawable.ic_profile)
     val showPanel = panel && !(t == 2 && chatOpen)
 
-    // системная «назад»: диалог -> закрыть; чат -> в список; чужой профиль -> на свой; иначе -> выход
     BackHandler(enabled = dlg != null || chatOpen || (t == 3 && pt.isNotEmpty() && pt != me)) {
         when {
             dlg != null -> act.dialog.value = null
@@ -234,7 +232,7 @@ private fun AhemRoot(act: MainActivity) {
             if (showPanel) {
                 LiquidGlass(
                     modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 12.dp).height(64.dp),
-                    border = ic(P.border), tabKey = t, tick = tick
+                    border = ic(P.border)
                 ) {
                     Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
                         for (i in 0 until 4) {
