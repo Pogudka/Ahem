@@ -60,73 +60,69 @@ dependencies {
     debugImplementation 'androidx.compose.ui:ui-tooling'
 }
 
-// ===== ИЗМЕРИТЕЛЬНЫЙ ЗОНД HAZE (временный, удалить после того как пришлёшь лог) =====
-// Не добавляет Haze в implementation -> compileDebugKotlin его не видит -> не может упасть по Haze.
-// Задача скачивает несколько версий Haze как сырые aar/jar и печатает имена классов внутри,
-// чтобы по логу увидеть РЕАЛЬНЫЕ пакеты/функции (hazeSource/hazeEffect/rememberHazeState/...) 
-// и следующую переделку окна написать точными именами, а не вслепую.
-def probeListJar = { File jar ->
+// ===== ВРЕМЕННЫЙ ЗАМЕР HAZE (удалить после того как пришлёшь секцию JAVAP) =====
+// Haze НЕ в implementation -> compileDebugKotlin его не видит -> по Haze упасть не может.
+// Задача: javap-ом вытащить РЕАЛЬНЫЕ публичные имена/сигнатуры функций из haze-android:0.7.3,
+// чтобы следующая интеграция была написана точными именами, а не по памяти (2 прошлые гадалки дали unresolved).
+def runJavap = { String cp, String cls ->
+    def jh = System.getenv('JAVA_HOME')
+    def bin = (jh != null && new File(jh, 'bin/javap').exists()) ? new File(jh, 'bin/javap').absolutePath : 'javap'
     try {
-        new java.util.zip.ZipFile(jar).withCloseable { z ->
-            def en = z.entries()
-            while (en.hasMoreElements()) {
-                def n = en.nextElement().name
-                if (n.endsWith('.class')) println "  CLASS $n"
-            }
-        }
+        def p = [bin, '-public', '-classpath', cp, cls].execute()
+        p.waitFor()
+        println "---- javap $cls ----"
+        println p.text
+        def er = p.err.text
+        if (er != null && er.trim()) println "ERR: $er"
     } catch (Throwable t) {
-        println "  jar-fail ${jar.name}: ${t.message}"
-    }
-}
-
-def probeFile = { File f ->
-    try {
-        if (f.name.endsWith('.aar')) {
-            new java.util.zip.ZipFile(f).withCloseable { z ->
-                def e = z.entries()
-                while (e.hasMoreElements()) {
-                    def en = e.nextElement()
-                    if (en.name == 'classes.jar') {
-                        def tmp = File.createTempFile('hzprobe', '.jar')
-                        tmp.deleteOnExit()
-                        z.getInputStream(en).withCloseable { ins ->
-                            tmp.withOutputStream { os -> os.write(ins.bytes) }
-                        }
-                        probeListJar(tmp)
-                    }
-                }
-            }
-        } else if (f.name.endsWith('.jar')) {
-            probeListJar(f)
-        }
-    } catch (Throwable t) {
-        println "  file-fail ${f.name}: ${t.message}"
+        println "javap-fail $cls : ${t.message}"
     }
 }
 
 tasks.register('hazeProbe') {
     doLast {
-        def coords = [
-            'dev.chrisbanes.haze:haze-android:0.7.3',
-            'dev.chrisbanes.haze:haze:0.7.3',
-            'dev.chrisbanes.haze:haze-android:0.6.0',
-            'dev.chrisbanes.haze:haze-android:0.5.1',
-            'dev.chrisbanes.haze:haze:0.5.1'
-        ]
-        coords.each { c ->
-            println "===== PROBE $c ====="
-            try {
-                def dep = dependencies.create(c)
-                def cfg = configurations.detachedConfiguration(dep)
-                cfg.transitive = false
-                cfg.resolve().each { f ->
-                    println "FILE ${f.name}"
-                    probeFile(f)
+        def primary = 'dev.chrisbanes.haze:haze-android:0.7.3'
+        println "===== JAVAP PRIMARY $primary ====="
+        try {
+            def dep = dependencies.create(primary)
+            def cfg = configurations.detachedConfiguration(dep)
+            cfg.transitive = false
+            def aar = cfg.resolve().find { it.name.endsWith('.aar') }
+            if (aar == null) {
+                println "no .aar resolved for $primary"
+            } else {
+                def cj = File.createTempFile('hzclasses', '.jar')
+                cj.deleteOnExit()
+                new java.util.zip.ZipFile(aar).withCloseable { z ->
+                    def e = z.getEntry('classes.jar')
+                    if (e != null) {
+                        z.getInputStream(e).withCloseable { ins ->
+                            cj.withOutputStream { os -> os.write(ins.bytes) }
+                        }
+                    }
                 }
-            } catch (Throwable t) {
-                println "PROBE-FAIL $c : ${t.message}"
+                ['dev.chrisbanes.haze.HazeKt',
+                 'dev.chrisbanes.haze.HazeChildKt',
+                 'dev.chrisbanes.haze.HazeState',
+                 'dev.chrisbanes.haze.HazeDefaults',
+                 'dev.chrisbanes.haze.HazeStyle'].each { c -> runJavap(cj.absolutePath, c) }
+
+                println "----- annotation/experimental scan -----"
+                new java.util.zip.ZipFile(cj).withCloseable { z ->
+                    def en = z.entries()
+                    def found = false
+                    while (en.hasMoreElements()) {
+                        def n = en.nextElement().name
+                        if (n.contains('Experimental') || n.contains('OptIn') || n.contains('RequiresOptIn')) {
+                            println "ANN $n"; found = true
+                        }
+                    }
+                    if (!found) println "ANN (none -> API stable, no @OptIn needed)"
+                }
             }
+        } catch (Throwable t) {
+            println "JAVAP-FAIL $primary : ${t.message}"
         }
-        println "===== PROBE DONE ====="
+        println "===== JAVAP DONE ====="
     }
 }
