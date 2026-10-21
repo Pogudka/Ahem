@@ -625,33 +625,51 @@ private fun doRegister(act: MainActivity) {
     }
 }
 
+// Вход: ник ОБЯЗАТЕЛЕН и сверяется с БД. Firebase-аут по email/паролю проходит,
+// но если введённый ник != ник этого аккаунта в users/<uid>/nick -> signOut + ошибка, в акк не пускаем.
 private fun doLogin(act: MainActivity) {
     if (act.isLoggingIn) return
     val email = act.emailInput.value.trim()
     val pass = act.passInput.value
+    val nick = act.nickInput.value.trim()
     if (email.isEmpty() || pass.isEmpty()) { act.feedStatus.value = "Email + пароль"; return }
+    if (nick.isEmpty()) { act.feedStatus.value = "Введите ник этого аккаунта"; return }
     act.isLoggingIn = true
     act.auth.signInWithEmailAndPassword(email, pass).addOnCompleteListener { task ->
-        act.isLoggingIn = false
-        if (task.isSuccessful) {
-            val userId = act.auth.currentUser?.uid ?: return@addOnCompleteListener
-            act.setSession(userId)
-            act.currentEmail = email; act.viewingUserId = userId
-            enterFeedMode(act)
-            loadMyFollowing(act) {}
-            act.database.child("users").child(userId).addListenerForSingleValueEvent(object : ValueEventListener {
-                override fun onDataChange(s: DataSnapshot) {
-                    act.currentNick = s.child("nick").getValue(String::class.java) ?: "Аноним"
-                    act.currentAvatar = s.child("avatar").getValue(String::class.java) ?: ""
-                    act.profAvatarB64.value = act.currentAvatar
-                    if (act.currentAvatar.isNotEmpty()) putAvatar(act, userId, act.currentAvatar)
-                    saveAccount(act, userId, act.currentNick, email, pass)
-                    act.saveSessionPrefs()
-                }
-                override fun onCancelled(e: DatabaseError) { dbDenied(act, e) }
-            })
-        } else {
+        if (!task.isSuccessful) {
+            act.isLoggingIn = false
             act.feedStatus.value = authErrorText(task.exception)
+            return@addOnCompleteListener
         }
+        val userId = act.auth.currentUser?.uid
+        if (userId == null) { act.isLoggingIn = false; return@addOnCompleteListener }
+        act.database.child("users").child(userId).addListenerForSingleValueEvent(object : ValueEventListener {
+            override fun onDataChange(s: DataSnapshot) {
+                val dbNick = s.child("nick").getValue(String::class.java) ?: ""
+                if (!dbNick.equals(nick, ignoreCase = true)) {
+                    act.isLoggingIn = false
+                    act.auth.signOut()
+                    act.feedStatus.value = "Ник не совпадает с этим аккаунтом"
+                    return
+                }
+                act.setSession(userId)
+                act.currentEmail = email
+                act.viewingUserId = userId
+                act.currentNick = dbNick
+                act.currentAvatar = s.child("avatar").getValue(String::class.java) ?: ""
+                act.profAvatarB64.value = act.currentAvatar
+                if (act.currentAvatar.isNotEmpty()) putAvatar(act, userId, act.currentAvatar)
+                saveAccount(act, userId, dbNick, email, pass)
+                act.saveSessionPrefs()
+                act.isLoggingIn = false
+                enterFeedMode(act)
+                loadMyFollowing(act) {}
+            }
+            override fun onCancelled(e: DatabaseError) {
+                act.isLoggingIn = false
+                act.auth.signOut()
+                act.feedStatus.value = "Не удалось проверить ник (сеть/права). Повтори."
+            }
+        })
     }
 }
