@@ -38,7 +38,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -69,12 +68,12 @@ import com.google.firebase.database.MutableData
 import com.google.firebase.database.Transaction
 import com.google.firebase.database.ValueEventListener
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.debounce
-import kotlinx.coroutines.flow.distinctUntilChanged
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.hypot
+
+private val nickRegex = Regex("^[A-Za-z0-9_]{5,20}$")
 
 internal fun loadFeed(act: MainActivity, onDone: (() -> Unit)? = null) {
     act.feedGen += 1
@@ -162,12 +161,6 @@ internal fun FeedScreen(act: MainActivity) {
         refreshing = act.refreshing.value,
         onRefresh = { act.refreshing.value = true; loadFeed(act) { act.refreshing.value = false } }
     )
-    LaunchedEffect(Unit) {
-        snapshotFlow { listState.firstVisibleItemIndex to (listState.firstVisibleItemScrollOffset / 300) }
-            .distinctUntilChanged()
-            .debounce(300L)
-            .collect { act.feedScrollTick.value++ }
-    }
     Column(Modifier.fillMaxSize().background(ic(P.bg))) {
         if (me.isEmpty()) {
             AuthForm(act)
@@ -473,9 +466,6 @@ internal fun ViewerDialog(act: MainActivity) {
     }
 }
 
-// Жест-гейт на ручном awaitEachGesture: 1 палец при scale==1 НЕ потребляем -> HorizontalPager листает (свайп).
-// 2 пальца или уже в зуме -> потребляем в Initial-пассе, pager видит consumed и отменяется, зум/пан якорятся под центроид.
-// Двойной тап = быстрый in/out.
 @Composable
 private fun ZoomImage(b64: String) {
     val ctx = LocalContext.current
@@ -577,7 +567,7 @@ private fun AuthForm(act: MainActivity) {
         Text("social", color = ic(P.textSec), fontSize = 13.sp, modifier = Modifier.padding(bottom = 32.dp))
         AuthField(email, "Email") { act.emailInput.value = it }
         Spacer(Modifier.height(10.dp))
-        AuthField(nick, "Ник (мин. 5 символов)") { act.nickInput.value = it }
+        AuthField(nick, "Ник (латиница, цифры, _, 5-20)") { act.nickInput.value = it }
         Spacer(Modifier.height(10.dp))
         AuthField(pass, "Пароль") { act.passInput.value = it }
         Spacer(Modifier.height(16.dp))
@@ -612,9 +602,10 @@ private fun doRegister(act: MainActivity) {
     val pass = act.passInput.value
     if (email.isEmpty() || nick.isEmpty() || pass.isEmpty()) { act.feedStatus.value = "Заполни все поля"; return }
     if (nick.length < 5) { act.feedStatus.value = "Ник минимум 5 символов"; return }
+    if (!nickRegex.matches(nick)) { act.feedStatus.value = "Ник: только латиница, цифры и _ (5-20)"; return }
     act.isRegistering = true
     isNickTaken(act, nick, "") { taken ->
-        if (taken) { act.feedStatus.value = "Ник уже занят"; act.isRegistering = false; return@isNickTaken }
+        if (taken) { act.feedStatus.value = "Ник занят или не удалось проверить сеть"; act.isRegistering = false; return@isNickTaken }
         act.auth.createUserWithEmailAndPassword(email, pass).addOnCompleteListener { task ->
             act.isRegistering = false
             if (task.isSuccessful) {
