@@ -5,7 +5,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -37,6 +36,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -47,6 +47,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -65,9 +67,12 @@ import com.google.firebase.database.MutableData
 import com.google.firebase.database.Transaction
 import com.google.firebase.database.ValueEventListener
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.hypot
 
 internal fun loadFeed(act: MainActivity, onDone: (() -> Unit)? = null) {
     act.feedGen += 1
@@ -155,6 +160,12 @@ internal fun FeedScreen(act: MainActivity) {
         refreshing = act.refreshing.value,
         onRefresh = { act.refreshing.value = true; loadFeed(act) { act.refreshing.value = false } }
     )
+    LaunchedEffect(Unit) {
+        snapshotFlow { listState.firstVisibleItemIndex to (listState.firstVisibleItemScrollOffset / 300) }
+            .distinctUntilChanged()
+            .debounce(300L)
+            .collect { act.feedScrollTick.value++ }
+    }
     Column(Modifier.fillMaxSize().background(ic(P.bg))) {
         if (me.isEmpty()) {
             AuthForm(act)
@@ -460,8 +471,9 @@ internal fun ViewerDialog(act: MainActivity) {
     }
 }
 
-// пинч 2 пальцами = зум ровно под палец (transformOrigin из центроида жеста),
-// свайп 1 пальцем при scale==1 уходит HorizontalPager = перемотка фото, двойной тап = in/out.
+// Жест-гейт: 1 палец при scale==1 НЕ потребляем -> HorizontalPager листает (свайп).
+// 2 пальца или уже в зуме -> потребляем сами, зум/пан якорятся под центроид (transformOrigin).
+// Двойной тап = быстрый in/out.
 @Composable
 private fun ZoomImage(b64: String) {
     val ctx = LocalContext.current
@@ -481,18 +493,39 @@ private fun ZoomImage(b64: String) {
                 })
             }
             .pointerInput(b64) {
-                detectTransformGestures { centroid, panBy, zoom, _ ->
-                    val old = scale
-                    val ns = (old * zoom).coerceIn(1f, 4f)
-                    pan += panBy
-                    if (old > 0f && ns != old) {
-                        val ratio = ns / old
-                        pan += (centroid - pan) * (1f - ratio)
-                    }
-                    scale = ns
-                    if (centroid.x in 0f..size.width.toFloat() && centroid.y in 0f..size.height.toFloat()) {
-                        ox = (centroid.x / size.width).coerceIn(0f, 1f)
-                        oy = (centroid.y / size.height).coerceIn(0f, 1f)
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    var prevC = Offset.Zero
+                    var prevD = 0f
+                    while (true) {
+                        val ev = awaitPointerEvent(PointerEventPass.Initial)
+                        val pts = ev.changes.filter { it.pressed }
+                        if (pts.size >= 2) {
+                            val c = centroidOf(pts)
+                            val d = distOf(pts)
+                            if (prevD > 0f) {
+                                val zoom = d / prevD
+                                val old = scale
+                                val ns = (old * zoom).coerceIn(1f, 4f)
+                                pan += c - prevC
+                                if (ns != old) { val r = ns / old; pan += (c - pan) * (1f - r) }
+                                scale = ns
+                                if (c.x in 0f..size.width.toFloat() && c.y in 0f..size.height.toFloat()) {
+                                    ox = (c.x / size.width).coerceIn(0f, 1f)
+                                    oy = (c.y / size.height).coerceIn(0f, 1f)
+                                }
+                            }
+                            prevC = c; prevD = d
+                            ev.changes.forEach { it.consume() }
+                        } else if (pts.size == 1 && scale > 1.02f) {
+                            val c = pts[0].position()
+                            if (prevC != Offset.Zero) pan += c - prevC
+                            prevC = c; prevD = 0f
+                            ev.changes.forEach { it.consume() }
+                        } else {
+                            prevC = Offset.Zero; prevD = 0f
+                        }
+                        if (pts.isEmpty()) break
                     }
                     if (scale <= 1.02f) { scale = 1f; pan = Offset.Zero; ox = 0.5f; oy = 0.5f }
                 }
@@ -513,6 +546,17 @@ private fun ZoomImage(b64: String) {
             }
         )
     }
+}
+
+private fun centroidOf(pts: List<PointerInputChange>): Offset {
+    var x = 0f; var y = 0f
+    for (p in pts) { val pos = p.position(); x += pos.x; y += pos.y }
+    return Offset(x / pts.size, y / pts.size)
+}
+private fun distOf(pts: List<PointerInputChange>): Float {
+    if (pts.size < 2) return 0f
+    val a = pts[0].position(); val b = pts[1].position()
+    return hypot(a.x - b.x, a.y - b.y)
 }
 
 private fun pickImages(act: MainActivity) {
