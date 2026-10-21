@@ -167,6 +167,8 @@ internal fun updatePostsNick(act: MainActivity, newNick: String) {
         })
 }
 
+// БЛОКИРУЮЩАЯ проверка: если чтение БД отменено (сбой/права/оффлайн) — считаем ник ЗАНЯТЫМ,
+// чтобы регистрация не проходила вслепую и не создавала дубликат/битый ник.
 internal fun isNickTaken(act: MainActivity, nick: String, excludeUid: String, callback: (Boolean) -> Unit) {
     act.database.child("users").addListenerForSingleValueEvent(object : ValueEventListener {
         override fun onDataChange(snapshot: DataSnapshot) {
@@ -180,6 +182,6 @@ internal fun isNickTaken(act: MainActivity, nick: String, excludeUid: String, ca
             }
             callback(taken)
         }
-        override fun onCancelled(error: DatabaseError) { callback(false) }
+        override fun onCancelled(error: DatabaseError) { callback(true) }
     })
 }
