@@ -4,6 +4,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -471,8 +473,8 @@ internal fun ViewerDialog(act: MainActivity) {
     }
 }
 
-// Жест-гейт: 1 палец при scale==1 НЕ потребляем -> HorizontalPager листает (свайп).
-// 2 пальца или уже в зуме -> потребляем сами, зум/пан якорятся под центроид (transformOrigin).
+// Жест-гейт на ручном awaitEachGesture: 1 палец при scale==1 НЕ потребляем -> HorizontalPager листает (свайп).
+// 2 пальца или уже в зуме -> потребляем в Initial-пассе, pager видит consumed и отменяется, зум/пан якорятся под центроид.
 // Двойной тап = быстрый in/out.
 @Composable
 private fun ZoomImage(b64: String) {
@@ -489,7 +491,7 @@ private fun ZoomImage(b64: String) {
             .pointerInput(b64) {
                 detectTapGestures(onDoubleTap = {
                     if (scale > 1.05f) { scale = 1f; pan = Offset.Zero; ox = 0.5f; oy = 0.5f }
-                    else { scale = 2.5f; pan = Offset.Zero; ox = it.x / size.width; oy = it.y / size.height }
+                    else { scale = 2.5f; pan = Offset.Zero; ox = it.x / size.width.toFloat(); oy = it.y / size.height.toFloat() }
                 })
             }
             .pointerInput(b64) {
@@ -510,15 +512,13 @@ private fun ZoomImage(b64: String) {
                                 pan += c - prevC
                                 if (ns != old) { val r = ns / old; pan += (c - pan) * (1f - r) }
                                 scale = ns
-                                if (c.x in 0f..size.width.toFloat() && c.y in 0f..size.height.toFloat()) {
-                                    ox = (c.x / size.width).coerceIn(0f, 1f)
-                                    oy = (c.y / size.height).coerceIn(0f, 1f)
-                                }
+                                val w = size.width.toFloat(); val h = size.height.toFloat()
+                                if (c.x in 0f..w && c.y in 0f..h) { ox = c.x / w; oy = c.y / h }
                             }
                             prevC = c; prevD = d
                             ev.changes.forEach { it.consume() }
                         } else if (pts.size == 1 && scale > 1.02f) {
-                            val c = pts[0].position()
+                            val c = pts[0].position
                             if (prevC != Offset.Zero) pan += c - prevC
                             prevC = c; prevD = 0f
                             ev.changes.forEach { it.consume() }
@@ -550,13 +550,13 @@ private fun ZoomImage(b64: String) {
 
 private fun centroidOf(pts: List<PointerInputChange>): Offset {
     var x = 0f; var y = 0f
-    for (p in pts) { val pos = p.position(); x += pos.x; y += pos.y }
+    for (p in pts) { val pos = p.position; x += pos.x; y += pos.y }
     return Offset(x / pts.size, y / pts.size)
 }
 private fun distOf(pts: List<PointerInputChange>): Float {
     if (pts.size < 2) return 0f
-    val a = pts[0].position(); val b = pts[1].position()
-    return hypot(a.x - b.x, a.y - b.y)
+    val a = pts[0].position; val b = pts[1].position
+    return hypot((a.x - b.x).toDouble(), (a.y - b.y).toDouble()).toFloat()
 }
 
 private fun pickImages(act: MainActivity) {
