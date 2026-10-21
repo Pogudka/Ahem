@@ -59,3 +59,74 @@ dependencies {
 
     debugImplementation 'androidx.compose.ui:ui-tooling'
 }
+
+// ===== ИЗМЕРИТЕЛЬНЫЙ ЗОНД HAZE (временный, удалить после того как пришлёшь лог) =====
+// Не добавляет Haze в implementation -> compileDebugKotlin его не видит -> не может упасть по Haze.
+// Задача скачивает несколько версий Haze как сырые aar/jar и печатает имена классов внутри,
+// чтобы по логу увидеть РЕАЛЬНЫЕ пакеты/функции (hazeSource/hazeEffect/rememberHazeState/...) 
+// и следующую переделку окна написать точными именами, а не вслепую.
+def probeListJar = { File jar ->
+    try {
+        new java.util.zip.ZipFile(jar).withCloseable { z ->
+            def en = z.entries()
+            while (en.hasMoreElements()) {
+                def n = en.nextElement().name
+                if (n.endsWith('.class')) println "  CLASS $n"
+            }
+        }
+    } catch (Throwable t) {
+        println "  jar-fail ${jar.name}: ${t.message}"
+    }
+}
+
+def probeFile = { File f ->
+    try {
+        if (f.name.endsWith('.aar')) {
+            new java.util.zip.ZipFile(f).withCloseable { z ->
+                def e = z.entries()
+                while (e.hasMoreElements()) {
+                    def en = e.nextElement()
+                    if (en.name == 'classes.jar') {
+                        def tmp = File.createTempFile('hzprobe', '.jar')
+                        tmp.deleteOnExit()
+                        z.getInputStream(en).withCloseable { ins ->
+                            tmp.withOutputStream { os -> os.write(ins.bytes) }
+                        }
+                        probeListJar(tmp)
+                    }
+                }
+            }
+        } else if (f.name.endsWith('.jar')) {
+            probeListJar(f)
+        }
+    } catch (Throwable t) {
+        println "  file-fail ${f.name}: ${t.message}"
+    }
+}
+
+tasks.register('hazeProbe') {
+    doLast {
+        def coords = [
+            'dev.chrisbanes.haze:haze-android:0.7.3',
+            'dev.chrisbanes.haze:haze:0.7.3',
+            'dev.chrisbanes.haze:haze-android:0.6.0',
+            'dev.chrisbanes.haze:haze-android:0.5.1',
+            'dev.chrisbanes.haze:haze:0.5.1'
+        ]
+        coords.each { c ->
+            println "===== PROBE $c ====="
+            try {
+                def dep = dependencies.create(c)
+                def cfg = configurations.detachedConfiguration(dep)
+                cfg.transitive = false
+                cfg.resolve().each { f ->
+                    println "FILE ${f.name}"
+                    probeFile(f)
+                }
+            } catch (Throwable t) {
+                println "PROBE-FAIL $c : ${t.message}"
+            }
+        }
+        println "===== PROBE DONE ====="
+    }
+}
