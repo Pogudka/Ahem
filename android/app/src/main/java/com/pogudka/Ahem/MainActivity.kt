@@ -24,7 +24,6 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
@@ -37,8 +36,6 @@ import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.DatabaseReference
 import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.database.ValueEventListener
-import dev.chrisbanes.haze.HazeState
-import dev.chrisbanes.haze.haze
 
 internal const val DB_URL = ""
 
@@ -216,7 +213,6 @@ private fun AhemRoot(act: MainActivity) {
     val icons = intArrayOf(R.drawable.ic_feed, R.drawable.ic_video, R.drawable.ic_chat, R.drawable.ic_profile)
     val showPanel = panel && !(t == 2 && chatOpen)
 
-    // системная «назад»: диалог -> закрыть; чат -> в список; чужой профиль -> на свой; иначе -> выход
     BackHandler(enabled = dlg != null || chatOpen || (t == 3 && pt.isNotEmpty() && pt != me)) {
         when {
             dlg != null -> act.dialog.value = null
@@ -225,24 +221,18 @@ private fun AhemRoot(act: MainActivity) {
         }
     }
 
-    val hazeState = remember { HazeState() }
-
     CompositionLocalProvider(LocalTextStyle provides TextStyle(fontFamily = fontUbuntuReg)) {
         Box(Modifier.fillMaxSize().background(ic(P.bg))) {
-            // ИСТОЧНИК размытия = только экранный контент. Панель намеренно вне этого Box -> нет само-съёмки/полос.
-            Box(Modifier.fillMaxSize().haze(hazeState)) {
-                when (t) {
-                    0 -> FeedScreen(act)
-                    1 -> VideoScreen()
-                    2 -> ChatScreen(act)
-                    3 -> ProfileScreen(act)
-                }
+            when (t) {
+                0 -> FeedScreen(act)
+                1 -> VideoScreen()
+                2 -> ChatScreen(act)
+                3 -> ProfileScreen(act)
             }
             if (showPanel) {
                 LiquidGlass(
                     modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 12.dp).height(64.dp),
-                    border = ic(P.border),
-                    hazeState = hazeState
+                    border = ic(P.border)
                 ) {
                     Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
                         for (i in 0 until 4) {
