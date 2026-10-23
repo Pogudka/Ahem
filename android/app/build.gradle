@@ -57,8 +57,5 @@ dependencies {
     implementation 'androidx.compose.material3:material3'
     implementation 'androidx.activity:activity-compose:1.9.3'
 
-    // Haze: живой backdrop-blur через RenderEffect (GPU). Android-вариант, имена API подтверждены javap-зондом.
-    implementation 'dev.chrisbanes.haze:haze-android:0.7.3'
-
     debugImplementation 'androidx.compose.ui:ui-tooling'
 }
