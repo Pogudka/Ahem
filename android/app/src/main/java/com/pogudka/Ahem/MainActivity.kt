@@ -3,6 +3,7 @@ package com.pogudka.Ahem
 import android.content.Context
 import android.content.Intent
 import android.graphics.Typeface
+import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -36,6 +37,7 @@ import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.DatabaseReference
 import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.database.ValueEventListener
+import com.google.firebase.storage.FirebaseStorage
 
 internal const val DB_URL = ""
 
@@ -45,6 +47,7 @@ class MainActivity : ComponentActivity() {
 
     internal lateinit var auth: FirebaseAuth
     internal lateinit var database: DatabaseReference
+    internal lateinit var storage: FirebaseStorage
 
     internal val avatarCache = mutableStateOf(HashMap<String, String>())
     internal val mediaCache = HashMap<String, String>()
@@ -62,6 +65,7 @@ class MainActivity : ComponentActivity() {
     internal val viewerImages = mutableStateOf<List<String>>(emptyList())
     internal val viewerStart = mutableStateOf(0)
     internal val refreshing = mutableStateOf(false)
+    internal val pendingVideoUri = mutableStateOf<Uri?>(null)
 
     internal var currentNick = ""
     internal var currentEmail = ""
@@ -110,6 +114,7 @@ class MainActivity : ComponentActivity() {
 
     internal val PICK_IMAGES = 1002
     internal val PICK_AVATAR = 1003
+    internal val PICK_VIDEO = 1004
     internal val ZOOM_MAX = 3f
     internal val FEED_LIMIT = 40
 
@@ -138,6 +143,7 @@ class MainActivity : ComponentActivity() {
             myFollowingIds.clear(); viewedLocally.clear(); statsMap.clear(); statsVer.value++
             optLiked.clear(); optCount.clear(); optViews.clear()
             postsRaw.clear(); pendingImages.clear(); peersList.clear(); chatMsgs.clear()
+            pendingVideoUri.value = null
             profTarget.value = ""; profNick.value = ""; profName.value = ""; profBio.value = ""
             profAvatarB64.value = ""; editAvatarB64.value = ""
             profFollowers.value = 0L; profFollowing.value = 0L
@@ -160,6 +166,7 @@ class MainActivity : ComponentActivity() {
         val dbInstance = if (DB_URL.isEmpty()) FirebaseDatabase.getInstance() else FirebaseDatabase.getInstance(DB_URL)
         try { dbInstance.setPersistenceEnabled(true) } catch (e: Exception) {}
         database = dbInstance.reference
+        storage = FirebaseStorage.getInstance()
 
         setContent { AhemRoot(this) }
 
