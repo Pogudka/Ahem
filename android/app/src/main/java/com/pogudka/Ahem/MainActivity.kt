@@ -25,6 +25,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -161,7 +162,7 @@ class MainActivity : ComponentActivity() {
     }
 
     internal fun showTab(i: Int, keep: Boolean = false) {
-        tab.value = i; panelVisible.value = true
+        tab.Value = i; panelVisible.value = true
         if (i == 3) { if (!keep) viewingUserId = currentUserId; refreshProfile(this) }
         if (i == 2) loadConversations(this)
     }
@@ -180,8 +181,6 @@ class MainActivity : ComponentActivity() {
 
         authListener = FirebaseAuth.AuthStateListener { firebaseAuth ->
             val user = firebaseAuth.currentUser
-            // при ручном входе/регистрации/смене аккаунта авто-сессия отключена:
-            // иначе неверный ник успевал мелькнуть лентой до signOut
             if (user != null && currentUserId.isEmpty() && !isLoggingIn && !isRegistering) {
                 setSession(user.uid)
                 viewingUserId = user.uid
@@ -284,7 +283,6 @@ private fun AhemRoot(act: MainActivity) {
                 }
             }
             DialogHost(act)
-            // заставка в стиле TikTok: фон и цвет по текущей теме
             if (splash) {
                 Box(Modifier.fillMaxSize().background(ic(P.bg)), contentAlignment = Alignment.Center) {
                     Text("Ahem", color = ic(P.text), fontSize = 44.sp, fontWeight = FontWeight.Bold, fontFamily = fontUnbounded)
