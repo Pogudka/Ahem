@@ -1,6 +1,7 @@
 package com.pogudka.Ahem
 
 import android.net.Uri
+import android.util.Base64
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -69,12 +70,18 @@ import com.google.firebase.database.MutableData
 import com.google.firebase.database.Transaction
 import com.google.firebase.database.ValueEventListener
 import kotlinx.coroutines.delay
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.hypot
 
 private val nickRegex = Regex("^[A-Za-z0-9_]{5,20}$")
+
+// Видео: файловый хост с прямыми ссылками (без Blaze/карты). До 200 МБ, хранится постоянно,
+// плеер стримит по https без полной скачки. URL хоста — единственная точка замены.
+private const val VIDEO_UPLOAD_URL = "https://catbox.moe/user/api.php"
+private const val VIDEO_MAX_BYTES = 200L * 1024 * 1024
 
 internal fun loadFeed(act: MainActivity, onDone: (() -> Unit)? = null) {
     act.feedGen += 1
@@ -150,6 +157,47 @@ internal fun incViews(act: MainActivity, postId: String) {
             act.optViews.remove(postId); act.statsVer.value++
         }
     }
+}
+
+// ---------- загрузка видео на хост (multipart, фон, прогресс) ----------
+
+private fun streamSize(act: MainActivity, uri: Uri): Long = try {
+    act.contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length } ?: -1L
+} catch (t: Throwable) { -1L }
+
+private fun uploadVideo(act: MainActivity, uri: Uri, name: String, onProgress: (Float) -> Unit): String? {
+    val boundary = "----ahem" + System.currentTimeMillis()
+    val conn = java.net.URL(VIDEO_UPLOAD_URL).openConnection() as java.net.HttpURLConnection
+    conn.requestMethod = "POST"
+    conn.doOutput = true
+    conn.connectTimeout = 30000
+    conn.readTimeout = 300000
+    conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+    conn.setRequestProperty("User-Agent", "AhemApp/1.0")
+    conn.setChunkedStreamingMode(64 * 1024)
+    val out = conn.outputStream
+    fun writeS(s: String) { out.write(s.toByteArray(Charsets.UTF_8)) }
+    writeS("--$boundary\r\nContent-Disposition: form-data; name=\"reqtype\"\r\n\r\nfileupload\r\n")
+    writeS("--$boundary\r\nContent-Disposition: form-data; name=\"fileToUpload\"; filename=\"$name\"\r\nContent-Type: video/mp4\r\n\r\n")
+    val ins = act.contentResolver.openInputStream(uri) ?: run { conn.disconnect(); return null }
+    val buf = ByteArray(64 * 1024)
+    val size = streamSize(act, uri)
+    var total = 0L
+    var r = ins.read(buf)
+    while (r > 0) {
+        out.write(buf, 0, r)
+        total += r
+        if (size > 0) onProgress((total.toFloat() / size.toFloat()).coerceIn(0f, 1f))
+        r = ins.read(buf)
+    }
+    ins.close()
+    writeS("\r\n--$boundary--\r\n")
+    out.flush(); out.close()
+    val code = conn.responseCode
+    val body = if (code == 200) conn.inputStream.bufferedReader().readText().trim()
+               else (conn.errorStream?.bufferedReader()?.readText() ?: "")
+    conn.disconnect()
+    return if (code == 200 && body.startsWith("http")) body else null
 }
 
 @OptIn(ExperimentalMaterialApi::class)
@@ -256,6 +304,7 @@ private fun Composer(act: MainActivity) {
     val txt = remember { mutableStateOf("") }
     val videoUri by act.pendingVideoUri
     var uploading by remember { mutableStateOf(false) }
+    var progress by remember { mutableStateOf(0f) }
     CardSurface(Modifier.fillMaxWidth().padding(14.dp, 0.dp, 14.dp, 12.dp), 18, true) {
         Box(
             Modifier.fillMaxWidth().padding(14.dp, 14.dp, 14.dp, 10.dp)
@@ -267,7 +316,7 @@ private fun Composer(act: MainActivity) {
                 value = txt.value, onValueChange = { txt.value = it },
                 textStyle = TextStyle(color = ic(P.text), fontSize = 15.sp, fontFamily = fontUbuntuReg),
                 modifier = Modifier.fillMaxWidth(),
-                decorationBox = { inner -> if (txt.value.isEmpty()) Text("Подпись к посту (до 4 фото + видео)", color = ic(P.textSec), fontSize = 15.sp); inner() }
+                decorationBox = { inner -> if (txt.value.isEmpty()) Text("Подпись к посту (до 4 фото + видео до 200 МБ)", color = ic(P.textSec), fontSize = 15.sp); inner() }
             )
         }
         if (act.pendingImages.isNotEmpty()) {
@@ -285,7 +334,10 @@ private fun Composer(act: MainActivity) {
             ) {
                 Icon(painter = painterResource(R.drawable.ic_video), contentDescription = null, tint = ic(P.text), modifier = Modifier.size(20.dp))
                 Spacer(Modifier.width(10.dp))
-                Text(if (uploading) "Загрузка видео..." else "Видео выбрано", color = ic(P.textSec), fontSize = 13.sp, modifier = Modifier.weight(1f))
+                Text(
+                    if (uploading) "Загрузка видео ${(progress * 100).toInt()}%" else "Видео выбрано",
+                    color = ic(P.textSec), fontSize = 13.sp, modifier = Modifier.weight(1f)
+                )
                 if (!uploading) GlassIconButton(R.drawable.ic_close, Modifier.size(28.dp)) { act.pendingVideoUri.value = null }
             }
         }
@@ -319,23 +371,27 @@ private fun Composer(act: MainActivity) {
                 act.pendingImages.clear()
                 act.pendingVideoUri.value = null
                 if (vUri != null) {
-                    uploading = true
-                    val ref = act.storage.reference.child("videos").child("$postId.mp4")
-                    ref.putFile(vUri)
-                        .addOnSuccessListener {
-                            ref.downloadUrl.addOnSuccessListener { uri ->
-                                act.database.child("posts").child(postId).child("videoUrl").setValue(uri.toString())
+                    val size = streamSize(act, vUri)
+                    if (size in 1 until VIDEO_MAX_BYTES) {
+                        uploading = true
+                        progress = 0f
+                        Thread {
+                            val url = try {
+                                uploadVideo(act, vUri, "ahem_$postId.mp4") { p -> act.uiHandler.post { progress = p } }
+                            } catch (t: Throwable) { null }
+                            act.uiHandler.post {
                                 uploading = false
-                                loadFeed(act)
-                            }.addOnFailureListener {
-                                uploading = false
-                                android.widget.Toast.makeText(act, "Не удалось получить ссылку видео", android.widget.Toast.LENGTH_LONG).show()
+                                if (url != null) {
+                                    act.database.child("posts").child(postId).child("videoUrl").setValue(url)
+                                    loadFeed(act)
+                                } else {
+                                    android.widget.Toast.makeText(act, "Ошибка загрузки видео", android.widget.Toast.LENGTH_LONG).show()
+                                }
                             }
-                        }
-                        .addOnFailureListener {
-                            uploading = false
-                            android.widget.Toast.makeText(act, "Ошибка загрузки видео. Включи Storage в Firebase Console", android.widget.Toast.LENGTH_LONG).show()
-                        }
+                        }.start()
+                    } else {
+                        android.widget.Toast.makeText(act, "Видео больше 200 МБ или не читается", android.widget.Toast.LENGTH_LONG).show()
+                    }
                 } else {
                     loadFeed(act)
                 }
@@ -422,21 +478,54 @@ private fun VideoBlock(onOpen: () -> Unit) {
 
 @Composable
 internal fun VideoPlayerDialog(act: MainActivity, url: String) {
+    var localPath by remember(url) { mutableStateOf<String?>(null) }
+    var err by remember(url) { mutableStateOf("") }
+    LaunchedEffect(url) {
+        err = ""
+        if (url.startsWith("rtdb:")) {
+            val postId = url.removePrefix("rtdb:")
+            val f = File(act.cacheDir, "v_$postId.mp4")
+            if (f.exists() && f.length() > 0) {
+                localPath = f.absolutePath
+            } else {
+                try {
+                    val s = awaitOnce(act.database.child("postVideos").child(postId))
+                    val sb = StringBuilder()
+                    s.children.sortedBy { it.key ?: "" }.forEach { sb.append(it.getValue(String::class.java) ?: "") }
+                    if (sb.isEmpty()) { err = "Видео не найдено"; return@LaunchedEffect }
+                    val bytes = Base64.decode(sb.toString(), Base64.NO_WRAP)
+                    f.writeBytes(bytes)
+                    localPath = f.absolutePath
+                } catch (t: Throwable) {
+                    err = "Не удалось загрузить видео"
+                }
+            }
+        } else {
+            localPath = null
+        }
+    }
     Dialog(onDismissRequest = { act.dialog.value = null }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Box(Modifier.fillMaxSize().background(Color.Black)) {
-            AndroidView(
-                factory = { ctx ->
-                    android.widget.VideoView(ctx).apply {
-                        setVideoURI(Uri.parse(url))
-                        val mc = android.widget.MediaController(ctx)
-                        mc.setAnchorView(this)
-                        setMediaController(mc)
-                        start()
-                    }
-                },
-                onRelease = { try { it.stopPlayback() } catch (t: Throwable) {} },
-                modifier = Modifier.fillMaxSize()
-            )
+            val src = if (url.startsWith("rtdb:")) localPath else url
+            if (src != null) {
+                AndroidView(
+                    factory = { ctx ->
+                        android.widget.VideoView(ctx).apply {
+                            if (url.startsWith("rtdb:")) setVideoPath(src) else setVideoURI(Uri.parse(src))
+                            val mc = android.widget.MediaController(ctx)
+                            mc.setAnchorView(this)
+                            setMediaController(mc)
+                            start()
+                        }
+                    },
+                    onRelease = { try { it.stopPlayback() } catch (t: Throwable) {} },
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else if (err.isNotEmpty()) {
+                Text(err, color = Color.White, fontSize = 14.sp, modifier = Modifier.align(Alignment.Center))
+            } else {
+                Text("Загрузка видео...", color = Color.White, fontSize = 14.sp, modifier = Modifier.align(Alignment.Center))
+            }
             GlassIconButton(R.drawable.ic_close, Modifier.align(Alignment.TopEnd).padding(14.dp)) { act.dialog.value = null }
         }
     }
