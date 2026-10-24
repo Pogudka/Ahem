@@ -209,11 +209,21 @@ private fun uploadFromFile(
 
 private fun uploadVideo(act: MainActivity, uri: Uri, name: String, onProgress: (Float) -> Unit): Pair<String?, String> {
     val f = File(act.cacheDir, "upload_" + System.currentTimeMillis() + ".mp4")
-    val copied: Boolean = try {
-        val ins = act.contentResolver.openInputStream(uri) ?: return@try false
-        ins.use { i -> f.outputStream().use { os -> i.copyTo(os, 64 * 1024) } }
-        true
-    } catch (t: Throwable) { false }
+    val copied = try {
+        val ins = act.contentResolver.openInputStream(uri)
+        if (ins != null) {
+            ins.use { i ->
+                f.outputStream().use { os ->
+                    i.copyTo(os, 64 * 1024)
+                }
+            }
+            true
+        } else {
+            false
+        }
+    } catch (t: Throwable) {
+        false
+    }
     if (!copied || !f.exists() || f.length() <= 0) { f.delete(); return Pair(null, "файл не читается") }
     if (f.length() > VIDEO_MAX_BYTES) { f.delete(); return Pair(null, "больше 200 МБ") }
     val errors = StringBuilder()
