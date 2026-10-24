@@ -84,8 +84,6 @@ import kotlin.math.hypot
 
 private val nickRegex = Regex("^[A-Za-z0-9_]{5,20}$")
 
-// Видео: цепочка хостов с прямыми ссылками (без Blaze/карты), до 200 МБ, плеер стримит.
-// Файл сначала копируется в кэш -> размер известен, стрим не рвётся, хосты можно перебирать.
 private const val VIDEO_UPLOAD_URL = "https://catbox.moe/user/api.php"
 private const val VIDEO_UPLOAD_URL2 = "https://pixeldrain.com/api/file"
 private const val VIDEO_UPLOAD_URL3 = "https://0x0.st"
@@ -168,8 +166,6 @@ internal fun incViews(act: MainActivity, postId: String) {
     }
 }
 
-// ---------- загрузка видео ----------
-
 private fun uploadFromFile(
     urlStr: String, fields: List<Pair<String, String>>, fileField: String, fileName: String, mime: String,
     f: File, onProgress: (Float) -> Unit
@@ -213,8 +209,10 @@ private fun uploadFromFile(
 
 private fun uploadVideo(act: MainActivity, uri: Uri, name: String, onProgress: (Float) -> Unit): Pair<String?, String> {
     val f = File(act.cacheDir, "upload_" + System.currentTimeMillis() + ".mp4")
-    val copied = try {
-        act.contentResolver.openInputStream(uri)?.use { ins -> f.outputStream().use { os -> ins.copyTo(os, 64 * 1024) } } ?: false
+    val copied: Boolean = try {
+        val ins = act.contentResolver.openInputStream(uri) ?: return@try false
+        ins.use { i -> f.outputStream().use { os -> i.copyTo(os, 64 * 1024) } }
+        true
     } catch (t: Throwable) { false }
     if (!copied || !f.exists() || f.length() <= 0) { f.delete(); return Pair(null, "файл не читается") }
     if (f.length() > VIDEO_MAX_BYTES) { f.delete(); return Pair(null, "больше 200 МБ") }
@@ -295,7 +293,6 @@ internal fun FeedScreen(act: MainActivity) {
     }
 }
 
-// полноэкранный редактор: контент скроллится, кнопки закреплены внизу
 @Composable
 internal fun PostEditorDialog(act: MainActivity) {
     Dialog(onDismissRequest = { act.dialog.value = null }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
@@ -478,7 +475,6 @@ private fun Thumb(b64: String, dpSize: Int) {
     }
 }
 
-// предпросмотр видео: первый кадр через MediaMetadataRetriever (фон, без лагов UI)
 @Composable
 private fun VideoThumb(uri: Uri, dpSize: Int) {
     val ctx = LocalContext.current
@@ -488,7 +484,7 @@ private fun VideoThumb(uri: Uri, dpSize: Int) {
             try {
                 val mr = android.media.MediaMetadataRetriever()
                 mr.setDataSource(ctx, uri)
-                val fr = mr.frameAtTime(0)
+                val fr = mr.getFrameAtTime(0L)
                 mr.release()
                 fr
             } catch (t: Throwable) { null }
