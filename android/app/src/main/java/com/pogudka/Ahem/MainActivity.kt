@@ -27,6 +27,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -35,7 +36,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.res.ResourcesCompat
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.database.DataSnapshot
@@ -43,6 +46,7 @@ import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.DatabaseReference
 import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.database.ValueEventListener
+import kotlinx.coroutines.delay
 
 internal const val DB_URL = ""
 
@@ -70,6 +74,7 @@ class MainActivity : ComponentActivity() {
     internal val viewerStart = mutableStateOf(0)
     internal val refreshing = mutableStateOf(false)
     internal val pendingVideoUri = mutableStateOf<Uri?>(null)
+    internal val splash = mutableStateOf(true)
 
     internal var currentNick = ""
     internal var currentEmail = ""
@@ -175,7 +180,9 @@ class MainActivity : ComponentActivity() {
 
         authListener = FirebaseAuth.AuthStateListener { firebaseAuth ->
             val user = firebaseAuth.currentUser
-            if (user != null && currentUserId.isEmpty()) {
+            // при ручном входе/регистрации/смене аккаунта авто-сессия отключена:
+            // иначе неверный ник успевал мелькнуть лентой до signOut
+            if (user != null && currentUserId.isEmpty() && !isLoggingIn && !isRegistering) {
                 setSession(user.uid)
                 viewingUserId = user.uid
                 val prefs = getSharedPreferences("ahem", Context.MODE_PRIVATE)
@@ -220,8 +227,14 @@ private fun AhemRoot(act: MainActivity) {
     val dlg by act.dialog
     val pt by act.profTarget
     val me by act.sessionUid
+    val splash by act.splash
     val icons = intArrayOf(R.drawable.ic_feed, R.drawable.ic_video, R.drawable.ic_chat, R.drawable.ic_profile)
     val showPanel = panel && !(t == 2 && chatOpen)
+
+    LaunchedEffect(Unit) {
+        delay(1400)
+        act.splash.value = false
+    }
 
     BackHandler(enabled = dlg != null || chatOpen || (t == 3 && pt.isNotEmpty() && pt != me)) {
         when {
@@ -251,7 +264,6 @@ private fun AhemRoot(act: MainActivity) {
                         IconButton(onClick = { act.showTab(1) }, modifier = Modifier.weight(1f)) {
                             Icon(painter = painterResource(icons[1]), contentDescription = null, tint = if (t == 1) ic(P.accent) else ic(P.navInactive))
                         }
-                        // большая кнопка [+] — полноэкранный редактор поста
                         Box(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.Center) {
                             Box(
                                 Modifier.size(46.dp).clip(RoundedCornerShape(16.dp)).background(ic(P.accent))
@@ -272,6 +284,12 @@ private fun AhemRoot(act: MainActivity) {
                 }
             }
             DialogHost(act)
+            // заставка в стиле TikTok: фон и цвет по текущей теме
+            if (splash) {
+                Box(Modifier.fillMaxSize().background(ic(P.bg)), contentAlignment = Alignment.Center) {
+                    Text("Ahem", color = ic(P.text), fontSize = 44.sp, fontWeight = FontWeight.Bold, fontFamily = fontUnbounded)
+                }
+            }
         }
     }
 }
