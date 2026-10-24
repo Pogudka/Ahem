@@ -1,5 +1,6 @@
 package com.pogudka.Ahem
 
+import android.net.Uri
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -45,7 +46,6 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -59,6 +59,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -253,6 +254,8 @@ private fun SearchRow(act: MainActivity) {
 @Composable
 private fun Composer(act: MainActivity) {
     val txt = remember { mutableStateOf("") }
+    val videoUri by act.pendingVideoUri
+    var uploading by remember { mutableStateOf(false) }
     CardSurface(Modifier.fillMaxWidth().padding(14.dp, 0.dp, 14.dp, 12.dp), 18, true) {
         Box(
             Modifier.fillMaxWidth().padding(14.dp, 14.dp, 14.dp, 10.dp)
@@ -264,7 +267,7 @@ private fun Composer(act: MainActivity) {
                 value = txt.value, onValueChange = { txt.value = it },
                 textStyle = TextStyle(color = ic(P.text), fontSize = 15.sp, fontFamily = fontUbuntuReg),
                 modifier = Modifier.fillMaxWidth(),
-                decorationBox = { inner -> if (txt.value.isEmpty()) Text("Подпись к посту (до 4 фото)", color = ic(P.textSec), fontSize = 15.sp); inner() }
+                decorationBox = { inner -> if (txt.value.isEmpty()) Text("Подпись к посту (до 4 фото + видео)", color = ic(P.textSec), fontSize = 15.sp); inner() }
             )
         }
         if (act.pendingImages.isNotEmpty()) {
@@ -272,12 +275,30 @@ private fun Composer(act: MainActivity) {
                 for (im in act.pendingImages.toList()) Thumb(im, 84)
             }
         }
+        if (videoUri != null) {
+            Row(
+                Modifier.fillMaxWidth().padding(14.dp, 0.dp, 14.dp, 10.dp)
+                    .background(ic(P.fieldBg), RoundedCornerShape(12.dp))
+                    .border(1.dp, ic(P.border), RoundedCornerShape(12.dp))
+                    .padding(12.dp, 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(painter = painterResource(R.drawable.ic_video), contentDescription = null, tint = ic(P.text), modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(10.dp))
+                Text(if (uploading) "Загрузка видео..." else "Видео выбрано", color = ic(P.textSec), fontSize = 13.sp, modifier = Modifier.weight(1f))
+                if (!uploading) GlassIconButton(R.drawable.ic_close, Modifier.size(28.dp)) { act.pendingVideoUri.value = null }
+            }
+        }
         Row(Modifier.fillMaxWidth().padding(14.dp, 0.dp, 14.dp, 14.dp), verticalAlignment = Alignment.CenterVertically) {
             GlassIconButton(R.drawable.ic_camera) { pickImages(act) }
+            Spacer(Modifier.width(8.dp))
+            GlassIconButton(R.drawable.ic_video) { pickVideo(act) }
             Spacer(Modifier.width(10.dp))
-            AccentButton("Опубликовать", Modifier.weight(1f)) {
+            AccentButton(if (uploading) "Загрузка..." else "Опубликовать", Modifier.weight(1f)) {
+                if (uploading) return@AccentButton
                 val text = txt.value
-                if (text.isEmpty() && act.pendingImages.isEmpty()) return@AccentButton
+                val vUri = videoUri
+                if (text.isEmpty() && act.pendingImages.isEmpty() && vUri == null) return@AccentButton
                 val postId = act.database.child("posts").push().key ?: return@AccentButton
                 val post = HashMap<String, Any>()
                 post["authorId"] = act.currentUserId
@@ -296,7 +317,28 @@ private fun Composer(act: MainActivity) {
                 act.database.child("postStats").child(postId).setValue(stats)
                 txt.value = ""
                 act.pendingImages.clear()
-                loadFeed(act)
+                act.pendingVideoUri.value = null
+                if (vUri != null) {
+                    uploading = true
+                    val ref = act.storage.reference.child("videos").child("$postId.mp4")
+                    ref.putFile(vUri)
+                        .addOnSuccessListener {
+                            ref.downloadUrl.addOnSuccessListener { uri ->
+                                act.database.child("posts").child(postId).child("videoUrl").setValue(uri.toString())
+                                uploading = false
+                                loadFeed(act)
+                            }.addOnFailureListener {
+                                uploading = false
+                                android.widget.Toast.makeText(act, "Не удалось получить ссылку видео", android.widget.Toast.LENGTH_LONG).show()
+                            }
+                        }
+                        .addOnFailureListener {
+                            uploading = false
+                            android.widget.Toast.makeText(act, "Ошибка загрузки видео. Включи Storage в Firebase Console", android.widget.Toast.LENGTH_LONG).show()
+                        }
+                } else {
+                    loadFeed(act)
+                }
             }
         }
     }
@@ -321,6 +363,7 @@ internal fun PostCard(act: MainActivity, post: DataSnapshot) {
     val authorId = post.child("authorId").getValue(String::class.java) ?: ""
     val authorNick = post.child("authorNick").getValue(String::class.java) ?: "?"
     val text = post.child("text").getValue(String::class.java) ?: ""
+    val videoUrl = post.child("videoUrl").getValue(String::class.java) ?: ""
     val ts = getTs(post)
     val ver by act.statsVer
     val stats = remember(postId, ver) { act.statsMap[postId] }
@@ -342,6 +385,7 @@ internal fun PostCard(act: MainActivity, post: DataSnapshot) {
         }
         if (text.isNotEmpty()) LinkText(text, color = ic(P.text), fontSize = 15.sp, modifier = Modifier.fillMaxWidth().padding(14.dp, 0.dp, 14.dp, 12.dp))
         MediaBlock(act, postId)
+        if (videoUrl.isNotEmpty()) VideoBlock { act.dialogArg.value = videoUrl; act.dialog.value = "video" }
         Row(Modifier.fillMaxWidth().padding(14.dp, 4.dp, 14.dp, 12.dp), verticalAlignment = Alignment.CenterVertically) {
             Row(Modifier.clickable { toggleLike(act, postId) }, verticalAlignment = Alignment.CenterVertically) {
                 Icon(painter = painterResource(if (liked) R.drawable.ic_heart else R.drawable.ic_heart_outline), contentDescription = null, tint = if (liked) ic(P.heartOn) else ic(P.textSec), modifier = Modifier.size(22.dp))
@@ -356,6 +400,44 @@ internal fun PostCard(act: MainActivity, post: DataSnapshot) {
                 Spacer(Modifier.weight(1f))
                 OutlineButton("+ @$authorNick") { followUser(act, authorId, authorNick) }
             }
+        }
+    }
+}
+
+@Composable
+private fun VideoBlock(onOpen: () -> Unit) {
+    Box(
+        Modifier.fillMaxWidth().height(200.dp).padding(14.dp, 0.dp, 14.dp, 12.dp)
+            .clip(RoundedCornerShape(14.dp)).background(Color.Black)
+            .clickable { onOpen() },
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(painter = painterResource(R.drawable.ic_video), contentDescription = null, tint = Color.White, modifier = Modifier.size(44.dp))
+            Spacer(Modifier.height(6.dp))
+            Text("Смотреть видео", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+        }
+    }
+}
+
+@Composable
+internal fun VideoPlayerDialog(act: MainActivity, url: String) {
+    Dialog(onDismissRequest = { act.dialog.value = null }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Box(Modifier.fillMaxSize().background(Color.Black)) {
+            AndroidView(
+                factory = { ctx ->
+                    android.widget.VideoView(ctx).apply {
+                        setVideoURI(Uri.parse(url))
+                        val mc = android.widget.MediaController(ctx)
+                        mc.setAnchorView(this)
+                        setMediaController(mc)
+                        start()
+                    }
+                },
+                onRelease = { try { it.stopPlayback() } catch (t: Throwable) {} },
+                modifier = Modifier.fillMaxSize()
+            )
+            GlassIconButton(R.drawable.ic_close, Modifier.align(Alignment.TopEnd).padding(14.dp)) { act.dialog.value = null }
         }
     }
 }
@@ -466,22 +548,28 @@ internal fun ViewerDialog(act: MainActivity) {
     }
 }
 
+// Удобный зум: пинч якорится в центроид (точка под пальцами стоит на месте), панорама ограничена краями,
+// двойной тап = 2.5x в точку тапа / сброс, свайп одним пальцем при scale==1 не потребляем -> pager листает фото.
 @Composable
 private fun ZoomImage(b64: String) {
     val ctx = LocalContext.current
     val req = maxOf(ctx.resources.displayMetrics.widthPixels, ctx.resources.displayMetrics.heightPixels)
     val shown = rememberDecoded(b64, req)
     var scale by remember(b64) { mutableStateOf(1f) }
-    var pan by remember(b64) { mutableStateOf(Offset.Zero) }
-    var ox by remember(b64) { mutableStateOf(0.5f) }
-    var oy by remember(b64) { mutableStateOf(0.5f) }
+    var t by remember(b64) { mutableStateOf(Offset.Zero) }
     Box(
         Modifier
             .fillMaxSize()
             .pointerInput(b64) {
-                detectTapGestures(onDoubleTap = {
-                    if (scale > 1.05f) { scale = 1f; pan = Offset.Zero; ox = 0.5f; oy = 0.5f }
-                    else { scale = 2.5f; pan = Offset.Zero; ox = it.x / size.width.toFloat(); oy = it.y / size.height.toFloat() }
+                detectTapGestures(onDoubleTap = { q ->
+                    if (scale > 1.05f) {
+                        scale = 1f; t = Offset.Zero
+                    } else {
+                        val c = q - Offset(size.width / 2f, size.height / 2f)
+                        val ns = 2.5f
+                        t = c - c * ns
+                        scale = ns
+                    }
                 })
             }
             .pointerInput(b64) {
@@ -490,34 +578,44 @@ private fun ZoomImage(b64: String) {
                     var prevC = Offset.Zero
                     var prevD = 0f
                     while (true) {
-                        val ev = awaitPointerEvent(PointerEventPass.Initial)
+                        val ev = awaitPointerEvent(PointerEventPass.Main)
                         val pts = ev.changes.filter { it.pressed }
                         if (pts.size >= 2) {
-                            val c = centroidOf(pts)
+                            val cAbs = centroidOf(pts)
+                            val c = cAbs - Offset(size.width / 2f, size.height / 2f)
                             val d = distOf(pts)
-                            if (prevD > 0f) {
-                                val zoom = d / prevD
+                            if (prevD > 0f && d > 0f) {
                                 val old = scale
-                                val ns = (old * zoom).coerceIn(1f, 4f)
-                                pan += c - prevC
-                                if (ns != old) { val r = ns / old; pan += (c - pan) * (1f - r) }
+                                val ns = (old * (d / prevD)).coerceIn(1f, 5f)
+                                if (ns != old) t = c - (c - t) * (ns / old)
+                                t += cAbs - prevC
                                 scale = ns
-                                val w = size.width.toFloat(); val h = size.height.toFloat()
-                                if (c.x in 0f..w && c.y in 0f..h) { ox = c.x / w; oy = c.y / h }
+                                val mx = (size.width / 2f) * (scale - 1f)
+                                val my = (size.height / 2f) * (scale - 1f)
+                                t = Offset(t.x.coerceIn(-mx, mx), t.y.coerceIn(-my, my))
+                                ev.changes.forEach { it.consume() }
                             }
-                            prevC = c; prevD = d
-                            ev.changes.forEach { it.consume() }
+                            prevC = cAbs; prevD = d
                         } else if (pts.size == 1 && scale > 1.02f) {
-                            val c = pts[0].position
-                            if (prevC != Offset.Zero) pan += c - prevC
-                            prevC = c; prevD = 0f
-                            ev.changes.forEach { it.consume() }
+                            val p = pts[0].position
+                            if (prevD > 0f) {
+                                prevC = p; prevD = 0f
+                            } else {
+                                if (prevC != Offset.Zero) {
+                                    t += p - prevC
+                                    val mx = (size.width / 2f) * (scale - 1f)
+                                    val my = (size.height / 2f) * (scale - 1f)
+                                    t = Offset(t.x.coerceIn(-mx, mx), t.y.coerceIn(-my, my))
+                                    ev.changes.forEach { it.consume() }
+                                }
+                                prevC = p
+                            }
                         } else {
                             prevC = Offset.Zero; prevD = 0f
                         }
                         if (pts.isEmpty()) break
                     }
-                    if (scale <= 1.02f) { scale = 1f; pan = Offset.Zero; ox = 0.5f; oy = 0.5f }
+                    if (scale <= 1.02f) { scale = 1f; t = Offset.Zero }
                 }
             },
         contentAlignment = Alignment.Center
@@ -529,10 +627,8 @@ private fun ZoomImage(b64: String) {
             modifier = Modifier.fillMaxSize().graphicsLayer {
                 scaleX = scale
                 scaleY = scale
-                translationX = pan.x
-                translationY = pan.y
-                transformOrigin = TransformOrigin(ox, oy)
-                clip = false
+                translationX = t.x
+                translationY = t.y
             }
         )
     }
@@ -554,6 +650,13 @@ private fun pickImages(act: MainActivity) {
     intent.type = "image/*"
     intent.putExtra(android.content.Intent.EXTRA_ALLOW_MULTIPLE, true)
     act.startActivityForResult(android.content.Intent.createChooser(intent, "Выбери фото"), act.PICK_IMAGES)
+}
+
+private fun pickVideo(act: MainActivity) {
+    val intent = android.content.Intent(android.content.Intent.ACTION_GET_CONTENT)
+    intent.type = "video/*"
+    intent.addCategory(android.content.Intent.CATEGORY_OPENABLE)
+    act.startActivityForResult(intent, act.PICK_VIDEO)
 }
 
 @Composable
@@ -625,8 +728,6 @@ private fun doRegister(act: MainActivity) {
     }
 }
 
-// Вход: ник ОБЯЗАТЕЛЕН и сверяется с БД. Firebase-аут по email/паролю проходит,
-// но если введённый ник != ник этого аккаунта в users/<uid>/nick -> signOut + ошибка, в акк не пускаем.
 private fun doLogin(act: MainActivity) {
     if (act.isLoggingIn) return
     val email = act.emailInput.value.trim()
