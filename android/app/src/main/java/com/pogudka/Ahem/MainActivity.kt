@@ -11,12 +11,17 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalTextStyle
@@ -27,6 +32,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
@@ -239,11 +245,28 @@ private fun AhemRoot(act: MainActivity) {
                     border = ic(P.border)
                 ) {
                     Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
-                        for (i in 0 until 4) {
-                            val active = i == t
-                            IconButton(onClick = { act.showTab(i) }, modifier = Modifier.weight(1f)) {
-                                Icon(painter = painterResource(icons[i]), contentDescription = null, tint = if (active) ic(P.accent) else ic(P.navInactive))
+                        IconButton(onClick = { act.showTab(0) }, modifier = Modifier.weight(1f)) {
+                            Icon(painter = painterResource(icons[0]), contentDescription = null, tint = if (t == 0) ic(P.accent) else ic(P.navInactive))
+                        }
+                        IconButton(onClick = { act.showTab(1) }, modifier = Modifier.weight(1f)) {
+                            Icon(painter = painterResource(icons[1]), contentDescription = null, tint = if (t == 1) ic(P.accent) else ic(P.navInactive))
+                        }
+                        // большая кнопка [+] — полноэкранный редактор поста
+                        Box(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.Center) {
+                            Box(
+                                Modifier.size(46.dp).clip(RoundedCornerShape(16.dp)).background(ic(P.accent))
+                                    .clickable { act.dialog.value = "editor" },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Box(Modifier.width(20.dp).height(2.5.dp).background(ic(P.accentText)))
+                                Box(Modifier.width(2.5.dp).height(20.dp).background(ic(P.accentText)))
                             }
+                        }
+                        IconButton(onClick = { act.showTab(2) }, modifier = Modifier.weight(1f)) {
+                            Icon(painter = painterResource(icons[2]), contentDescription = null, tint = if (t == 2) ic(P.accent) else ic(P.navInactive))
+                        }
+                        IconButton(onClick = { act.showTab(3) }, modifier = Modifier.weight(1f)) {
+                            Icon(painter = painterResource(icons[3]), contentDescription = null, tint = if (t == 3) ic(P.accent) else ic(P.navInactive))
                         }
                     }
                 }
