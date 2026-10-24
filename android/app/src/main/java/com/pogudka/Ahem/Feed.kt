@@ -548,8 +548,6 @@ internal fun ViewerDialog(act: MainActivity) {
     }
 }
 
-// Удобный зум: пинч якорится в центроид (точка под пальцами стоит на месте), панорама ограничена краями,
-// двойной тап = 2.5x в точку тапа / сброс, свайп одним пальцем при scale==1 не потребляем -> pager листает фото.
 @Composable
 private fun ZoomImage(b64: String) {
     val ctx = LocalContext.current
