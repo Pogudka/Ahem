@@ -21,11 +21,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -152,70 +150,73 @@ internal fun ProfileScreen(act: MainActivity) {
             if (gen == act.profileGen) { grid.clear(); grid.addAll(g); postsCount = pc; likesCount = lc }
         }
     }
-    Column(Modifier.fillMaxSize().background(ic(P.bg)).verticalScroll(rememberScrollState())) {
-        Row(Modifier.fillMaxWidth().padding(18.dp, 14.dp, 18.dp, 16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(act.profNick.value.ifEmpty { "@" }, color = ic(P.text), fontSize = 22.sp, fontWeight = FontWeight.Bold, fontFamily = fontUnbounded, modifier = Modifier.weight(1f))
-            if (isMe) GlassIconButton(R.drawable.ic_settings) { act.dialog.value = "settings" }
-        }
-        Row(Modifier.fillMaxWidth().padding(18.dp, 0.dp, 18.dp, 16.dp), verticalAlignment = Alignment.CenterVertically) {
-            if (isMe) Avatar(act.profAvatarB64.value.ifEmpty { act.currentAvatar }, act.profName.value, 84.dp)
-            else AuthorAvatar(target, act.profName.value, 84.dp)
-            Spacer(Modifier.width(20.dp))
-            StatCol(postsCount, "посты", Modifier.weight(1f))
-            StatCol(act.profFollowers.value, "подписчики", Modifier.weight(1f), onClick = { act.dialogArg.value = act.currentProfileTargetId; act.dialog.value = "followers" })
-            StatCol(act.profFollowing.value, "подписки", Modifier.weight(1f), onClick = { act.dialogArg.value = act.currentProfileTargetId; act.dialog.value = "following" })
-            StatCol(likesCount, "лайки", Modifier.weight(1f))
-        }
-        if (act.profName.value.isNotEmpty()) Text(act.profName.value, color = ic(P.text), fontSize = 15.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(18.dp, 0.dp, 18.dp, 2.dp))
-        if (act.profBio.value.isNotEmpty()) Text(act.profBio.value, color = ic(P.text), fontSize = 14.sp, modifier = Modifier.padding(18.dp, 0.dp, 18.dp, 14.dp))
-        Row(Modifier.fillMaxWidth().padding(18.dp, 0.dp, 18.dp, 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (isMe) OutlineButton("Редактировать профиль", Modifier.weight(1f)) { act.dialog.value = "edit" }
-            else if (target.isNotEmpty() && target != me) OutlineButton("Написать", Modifier.weight(1f)) { openChat(act, target, act.profName.value) }
-            else Spacer(Modifier.weight(1f))
-            OutlineButton("Поделиться", Modifier.weight(1f)) {
-                val cm = act.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                cm.setPrimaryClip(ClipData.newPlainText("nick", "@" + act.profName.value))
-                android.widget.Toast.makeText(act, "Ник скопирован", android.widget.Toast.LENGTH_SHORT).show()
+    val rows = remember(grid.toList(), mode) { grid.toList().chunked(3) }
+    LazyColumn(
+        Modifier.fillMaxSize().background(ic(P.bg)),
+        contentPadding = PaddingValues(0.dp, 0.dp, 0.dp, 96.dp)
+    ) {
+        item {
+            Row(Modifier.fillMaxWidth().padding(18.dp, 14.dp, 18.dp, 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(act.profNick.value.ifEmpty { "@" }, color = ic(P.text), fontSize = 22.sp, fontWeight = FontWeight.Bold, fontFamily = fontUnbounded, modifier = Modifier.weight(1f))
+                if (isMe) GlassIconButton(R.drawable.ic_settings) { act.dialog.value = "settings" }
             }
         }
-        Row(
-            Modifier.fillMaxWidth().padding(18.dp, 0.dp, 18.dp, 2.dp)
-                .background(ic(P.surface), RoundedCornerShape(14.dp))
-                .border(1.dp, ic(P.border), RoundedCornerShape(14.dp))
-                .padding(4.dp)
-        ) {
-            Box(Modifier.weight(1f).height(38.dp).clickable { mode = 0 }, contentAlignment = Alignment.Center) {
-                Icon(painter = painterResource(R.drawable.ic_grid), contentDescription = null, tint = if (mode == 0) ic(P.text) else ic(P.navInactive), modifier = Modifier.size(22.dp))
-            }
-            Box(Modifier.weight(1f).height(38.dp).clickable { mode = 1 }, contentAlignment = Alignment.Center) {
-                Icon(painter = painterResource(R.drawable.ic_heart), contentDescription = null, tint = if (mode == 1) ic(P.accent) else ic(P.navInactive), modifier = Modifier.size(22.dp))
+        item {
+            Row(Modifier.fillMaxWidth().padding(18.dp, 0.dp, 18.dp, 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (isMe) Avatar(act.profAvatarB64.value.ifEmpty { act.currentAvatar }, act.profName.value, 84.dp)
+                else AuthorAvatar(target, act.profName.value, 84.dp)
+                Spacer(Modifier.width(20.dp))
+                StatCol(postsCount, "посты", Modifier.weight(1f))
+                StatCol(act.profFollowers.value, "подписчики", Modifier.weight(1f), onClick = { act.dialogArg.value = act.currentProfileTargetId; act.dialog.value = "followers" })
+                StatCol(act.profFollowing.value, "подписки", Modifier.weight(1f), onClick = { act.dialogArg.value = act.currentProfileTargetId; act.dialog.value = "following" })
+                StatCol(likesCount, "лайки", Modifier.weight(1f))
             }
         }
-        ProfileGrid(act, grid.toList(), mode)
-        Spacer(Modifier.height(96.dp))
-    }
-}
-
-@Composable
-private fun ProfileGrid(act: MainActivity, grid: List<DataSnapshot>, mode: Int) {
-    if (grid.isEmpty()) {
-        Text(
-            if (mode == 0) "Нет постов" else "Нет лайков",
-            color = ic(P.textSec), fontSize = 14.sp, textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth().padding(0.dp, 40.dp)
-        )
-        return
-    }
-    Column(Modifier.fillMaxWidth().padding(18.dp, 0.dp, 18.dp, 0.dp)) {
-        var i = 0
-        while (i < grid.size) {
-            Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                for (c in 0 until 3) {
-                    val idx = i + c
-                    if (idx < grid.size) GridTile(act, grid[idx], Modifier.weight(1f)) else Spacer(Modifier.weight(1f).height(110.dp))
+        if (act.profName.value.isNotEmpty()) item { Text(act.profName.value, color = ic(P.text), fontSize = 15.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(18.dp, 0.dp, 18.dp, 2.dp)) }
+        if (act.profBio.value.isNotEmpty()) item { Text(act.profBio.value, color = ic(P.text), fontSize = 14.sp, modifier = Modifier.padding(18.dp, 0.dp, 18.dp, 14.dp)) }
+        item {
+            Row(Modifier.fillMaxWidth().padding(18.dp, 0.dp, 18.dp, 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (isMe) OutlineButton("Редактировать профиль", Modifier.weight(1f)) { act.dialog.value = "edit" }
+                else if (target.isNotEmpty() && target != me) OutlineButton("Написать", Modifier.weight(1f)) { openChat(act, target, act.profName.value) }
+                else Spacer(Modifier.weight(1f))
+                OutlineButton("Поделиться", Modifier.weight(1f)) {
+                    val cm = act.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    cm.setPrimaryClip(ClipData.newPlainText("nick", "@" + act.profName.value))
+                    android.widget.Toast.makeText(act, "Ник скопирован", android.widget.Toast.LENGTH_SHORT).show()
                 }
             }
-            i += 3
+        }
+        item {
+            Row(
+                Modifier.fillMaxWidth().padding(18.dp, 0.dp, 18.dp, 2.dp)
+                    .background(ic(P.surface), RoundedCornerShape(14.dp))
+                    .border(1.dp, ic(P.border), RoundedCornerShape(14.dp))
+                    .padding(4.dp)
+            ) {
+                Box(Modifier.weight(1f).height(38.dp).clickable { mode = 0 }, contentAlignment = Alignment.Center) {
+                    Icon(painter = painterResource(R.drawable.ic_grid), contentDescription = null, tint = if (mode == 0) ic(P.text) else ic(P.navInactive), modifier = Modifier.size(22.dp))
+                }
+                Box(Modifier.weight(1f).height(38.dp).clickable { mode = 1 }, contentAlignment = Alignment.Center) {
+                    Icon(painter = painterResource(R.drawable.ic_heart), contentDescription = null, tint = if (mode == 1) ic(P.accent) else ic(P.navInactive), modifier = Modifier.size(22.dp))
+                }
+            }
+        }
+        if (rows.isEmpty()) {
+            item {
+                Text(
+                    if (mode == 0) "Нет постов" else "Нет лайков",
+                    color = ic(P.textSec), fontSize = 14.sp, textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth().padding(0.dp, 40.dp)
+                )
+            }
+        } else {
+            items(rows) { r ->
+                Row(Modifier.fillMaxWidth().padding(18.dp, 2.dp, 18.dp, 0.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                    for (c in 0 until 3) {
+                        if (c < r.size) GridTile(act, r[c], Modifier.weight(1f)) else Spacer(Modifier.weight(1f).height(110.dp))
+                    }
+                }
+            }
         }
     }
 }
