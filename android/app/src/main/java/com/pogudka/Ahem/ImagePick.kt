@@ -49,5 +49,7 @@ internal fun handleActivityResult(act: MainActivity, requestCode: Int, resultCod
                 act.currentAvatar = avatarB64; act.profAvatarB64.value = avatarB64; act.editAvatarB64.value = avatarB64
             }
         } catch (e: Exception) {}
+    } else if (requestCode == act.PICK_VIDEO) {
+        act.pendingVideoUri.value = data.data
     }
 }
