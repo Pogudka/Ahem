@@ -135,7 +135,6 @@ internal fun ProfileScreen(act: MainActivity) {
     val target by act.profTarget
     val isMe = target.isNotEmpty() && target == me
     val editAv by act.editAvatarB64
-    // мгновенное обновление своего аватара везде при выборе фото (ImagePick пишет editAvatarB64)
     LaunchedEffect(editAv) {
         if (editAv.isNotEmpty() && me.isNotEmpty()) {
             act.profAvatarB64.value = editAv; act.currentAvatar = editAv; putAvatar(act, me, editAv)
@@ -241,6 +240,11 @@ private fun GridTile(act: MainActivity, p: DataSnapshot, modifier: Modifier = Mo
     ) {
         if (shown != null) Image(bitmap = shown.asImageBitmap(), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
         else Text(txt, color = ic(P.text), fontSize = 11.sp, maxLines = 6, modifier = Modifier.padding(6.dp))
+        if ((p.child("videoUrl").getValue(String::class.java) ?: "").isNotEmpty()) {
+            Box(Modifier.align(Alignment.Center).background(Color(0x99000000), CircleShape).padding(8.dp)) {
+                Icon(painter = painterResource(R.drawable.ic_video), contentDescription = null, tint = Color.White, modifier = Modifier.size(20.dp))
+            }
+        }
         Box(Modifier.align(Alignment.TopEnd).padding(6.dp).clickable { toggleLike(act, postId) }) {
             Icon(painter = painterResource(if (liked) R.drawable.ic_heart else R.drawable.ic_heart_outline), contentDescription = null, tint = if (liked) ic(P.heartOn) else ic(P.textSec), modifier = Modifier.size(22.dp))
         }
@@ -258,6 +262,7 @@ internal fun DialogHost(act: MainActivity) {
         "following" -> FollowListDialog(act, false)
         "post" -> PostDetailDialog(act, act.dialogArg.value)
         "viewer" -> ViewerDialog(act)
+        "video" -> VideoPlayerDialog(act, act.dialogArg.value)
     }
 }
 
@@ -432,7 +437,6 @@ private fun FollowListDialog(act: MainActivity, followers: Boolean) {
                     val nick = c.child("nick").getValue(String::class.java) ?: "?"
                     items.add(Pair(uid, nick)); uids.add(uid)
                 }
-                // prefetch аватаров в snapshot-кэш одним чтением users -> первый показ без пустых кружков
                 val need = uids.filter { !hasAvatar(act, it) }
                 if (need.isNotEmpty()) act.database.child("users").addListenerForSingleValueEvent(object : ValueEventListener {
                     override fun onDataChange(us: DataSnapshot) {
