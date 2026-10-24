@@ -37,7 +37,6 @@ import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.DatabaseReference
 import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.database.ValueEventListener
-import com.google.firebase.storage.FirebaseStorage
 
 internal const val DB_URL = ""
 
@@ -47,7 +46,6 @@ class MainActivity : ComponentActivity() {
 
     internal lateinit var auth: FirebaseAuth
     internal lateinit var database: DatabaseReference
-    internal lateinit var storage: FirebaseStorage
 
     internal val avatarCache = mutableStateOf(HashMap<String, String>())
     internal val mediaCache = HashMap<String, String>()
@@ -166,7 +164,6 @@ class MainActivity : ComponentActivity() {
         val dbInstance = if (DB_URL.isEmpty()) FirebaseDatabase.getInstance() else FirebaseDatabase.getInstance(DB_URL)
         try { dbInstance.setPersistenceEnabled(true) } catch (e: Exception) {}
         database = dbInstance.reference
-        storage = FirebaseStorage.getInstance()
 
         setContent { AhemRoot(this) }
 
