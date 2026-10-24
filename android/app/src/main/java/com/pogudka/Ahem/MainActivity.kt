@@ -162,7 +162,7 @@ class MainActivity : ComponentActivity() {
     }
 
     internal fun showTab(i: Int, keep: Boolean = false) {
-        tab.Value = i; panelVisible.value = true
+        tab.value = i; panelVisible.value = true
         if (i == 3) { if (!keep) viewingUserId = currentUserId; refreshProfile(this) }
         if (i == 2) loadConversations(this)
     }
