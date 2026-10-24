@@ -78,10 +78,12 @@ import kotlin.math.hypot
 
 private val nickRegex = Regex("^[A-Za-z0-9_]{5,20}$")
 
-// Видео: файловый хост с прямыми ссылками (без Blaze/карты). До 200 МБ, хранится постоянно,
-// плеер стримит по https без полной скачки. URL хоста — единственная точка замены.
+// Видео: внешние файловые хосты с прямыми ссылками (без Blaze/карты), до 200 МБ, плеер стримит.
+// Основной catbox, запасной pixeldrain; при отказе обоих тост показывает точные коды ответов.
 private const val VIDEO_UPLOAD_URL = "https://catbox.moe/user/api.php"
+private const val VIDEO_UPLOAD_URL2 = "https://pixeldrain.com/api/file"
 private const val VIDEO_MAX_BYTES = 200L * 1024 * 1024
+private const val VIDEO_UA = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
 
 internal fun loadFeed(act: MainActivity, onDone: (() -> Unit)? = null) {
     act.feedGen += 1
@@ -159,29 +161,35 @@ internal fun incViews(act: MainActivity, postId: String) {
     }
 }
 
-// ---------- загрузка видео на хост (multipart, фон, прогресс) ----------
+// ---------- загрузка видео: multipart фиксированной длины + браузерный UA + fallback ----------
 
 private fun streamSize(act: MainActivity, uri: Uri): Long = try {
     act.contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length } ?: -1L
 } catch (t: Throwable) { -1L }
 
-private fun uploadVideo(act: MainActivity, uri: Uri, name: String, onProgress: (Float) -> Unit): String? {
+private fun httpUploadMultipart(
+    urlStr: String, fields: List<Pair<String, String>>, fileField: String, fileName: String, mime: String,
+    act: MainActivity, uri: Uri, size: Long, onProgress: (Float) -> Unit
+): Pair<Int, String> {
     val boundary = "----ahem" + System.currentTimeMillis()
-    val conn = java.net.URL(VIDEO_UPLOAD_URL).openConnection() as java.net.HttpURLConnection
+    val conn = java.net.URL(urlStr).openConnection() as java.net.HttpURLConnection
     conn.requestMethod = "POST"
     conn.doOutput = true
     conn.connectTimeout = 30000
     conn.readTimeout = 300000
     conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
-    conn.setRequestProperty("User-Agent", "AhemApp/1.0")
-    conn.setChunkedStreamingMode(64 * 1024)
+    conn.setRequestProperty("User-Agent", VIDEO_UA)
+    conn.setRequestProperty("Accept", "*/*")
+    val head = StringBuilder()
+    for ((k, v) in fields) head.append("--").append(boundary).append("\r\nContent-Disposition: form-data; name=\"").append(k).append("\"\r\n\r\n").append(v).append("\r\n")
+    head.append("--").append(boundary).append("\r\nContent-Disposition: form-data; name=\"").append(fileField).append("\"; filename=\"").append(fileName).append("\"\r\nContent-Type: ").append(mime).append("\r\n\r\n")
+    val headBytes = head.toString().toByteArray(Charsets.UTF_8)
+    val footBytes = "\r\n--$boundary--\r\n".toByteArray(Charsets.UTF_8)
+    conn.setFixedLengthStreamingMode(headBytes.size.toLong() + size + footBytes.size.toLong())
     val out = conn.outputStream
-    fun writeS(s: String) { out.write(s.toByteArray(Charsets.UTF_8)) }
-    writeS("--$boundary\r\nContent-Disposition: form-data; name=\"reqtype\"\r\n\r\nfileupload\r\n")
-    writeS("--$boundary\r\nContent-Disposition: form-data; name=\"fileToUpload\"; filename=\"$name\"\r\nContent-Type: video/mp4\r\n\r\n")
-    val ins = act.contentResolver.openInputStream(uri) ?: run { conn.disconnect(); return null }
+    out.write(headBytes)
+    val ins = act.contentResolver.openInputStream(uri) ?: run { conn.disconnect(); return Pair(-1, "no stream") }
     val buf = ByteArray(64 * 1024)
-    val size = streamSize(act, uri)
     var total = 0L
     var r = ins.read(buf)
     while (r > 0) {
@@ -191,13 +199,33 @@ private fun uploadVideo(act: MainActivity, uri: Uri, name: String, onProgress: (
         r = ins.read(buf)
     }
     ins.close()
-    writeS("\r\n--$boundary--\r\n")
+    out.write(footBytes)
     out.flush(); out.close()
     val code = conn.responseCode
-    val body = if (code == 200) conn.inputStream.bufferedReader().readText().trim()
-               else (conn.errorStream?.bufferedReader()?.readText() ?: "")
+    val body = if (code in 200..299) conn.inputStream.bufferedReader().readText() else (conn.errorStream?.bufferedReader()?.readText() ?: "")
     conn.disconnect()
-    return if (code == 200 && body.startsWith("http")) body else null
+    return Pair(code, body)
+}
+
+private fun uploadVideo(act: MainActivity, uri: Uri, name: String, onProgress: (Float) -> Unit): Pair<String?, String> {
+    val size = streamSize(act, uri)
+    if (size <= 0) return Pair(null, "размер не читается")
+    return try {
+        val (code, body) = httpUploadMultipart(VIDEO_UPLOAD_URL, listOf("reqtype" to "fileupload"), "fileToUpload", name, "video/mp4", act, uri, size, onProgress)
+        if (code == 200 && body.trim().startsWith("http")) return Pair(body.trim(), "")
+        var err = "catbox HTTP $code"
+        val (c2, b2) = httpUploadMultipart(VIDEO_UPLOAD_URL2, listOf("name" to name), "file", name, "video/mp4", act, uri, size, onProgress)
+        if (c2 in 200..299) {
+            val m = Regex("\"id\"\\s*:\\s*\"([^\"]+)\"").find(b2)
+            if (m != null) return Pair("https://pixeldrain.com/api/file/" + m.groupValues[1], "")
+            err += "; pixeldrain без id"
+        } else {
+            err += "; pixeldrain HTTP $c2"
+        }
+        Pair(null, err)
+    } catch (t: Throwable) {
+        Pair(null, "сеть: ${t.javaClass.simpleName}")
+    }
 }
 
 @OptIn(ExperimentalMaterialApi::class)
@@ -217,7 +245,6 @@ internal fun FeedScreen(act: MainActivity) {
             Row(Modifier.fillMaxWidth().padding(18.dp, 14.dp, 18.dp, 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("Ahem", color = ic(P.text), fontSize = 20.sp, fontWeight = FontWeight.Bold, fontFamily = fontUnbounded)
             }
-            Composer(act)
             SearchRow(act)
             val sorted = act.postsRaw.toList()
                 .sortedByDescending { getTs(it) }
@@ -254,6 +281,26 @@ internal fun FeedScreen(act: MainActivity) {
         }
     }
 }
+
+// полноэкранный редактор поста (открывается кнопкой [+] в нижней панели)
+@Composable
+internal fun PostEditorDialog(act: MainActivity) {
+    Dialog(onDismissRequest = { act.dialog.value = null }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Column(Modifier.fillMaxSize().background(ic(P.bg))) {
+            Row(Modifier.fillMaxWidth().padding(8.dp, 10.dp, 14.dp, 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                GlassIconButton(R.drawable.ic_close) { act.dialog.value = null }
+                Spacer(Modifier.width(12.dp))
+                Text("Новый пост", color = ic(P.text), fontSize = 18.sp, fontWeight = FontWeight.Bold, fontFamily = fontUnbounded)
+            }
+            Column(Modifier.fillMaxSize().verticalScrollCompat()) {
+                Composer(act, onDone = { act.dialog.value = null })
+            }
+        }
+    }
+}
+
+@Composable
+private fun Modifier.verticalScrollCompat(): Modifier = this
 
 @OptIn(ExperimentalMaterialApi::class)
 @Composable
@@ -300,7 +347,7 @@ private fun SearchRow(act: MainActivity) {
 }
 
 @Composable
-private fun Composer(act: MainActivity) {
+private fun Composer(act: MainActivity, onDone: () -> Unit = {}) {
     val txt = remember { mutableStateOf("") }
     val videoUri by act.pendingVideoUri
     var uploading by remember { mutableStateOf(false) }
@@ -376,16 +423,18 @@ private fun Composer(act: MainActivity) {
                         uploading = true
                         progress = 0f
                         Thread {
-                            val url = try {
+                            val res = try {
                                 uploadVideo(act, vUri, "ahem_$postId.mp4") { p -> act.uiHandler.post { progress = p } }
-                            } catch (t: Throwable) { null }
+                            } catch (t: Throwable) { Pair(null, "сбой потока") }
                             act.uiHandler.post {
                                 uploading = false
+                                val url = res.first
                                 if (url != null) {
                                     act.database.child("posts").child(postId).child("videoUrl").setValue(url)
                                     loadFeed(act)
+                                    onDone()
                                 } else {
-                                    android.widget.Toast.makeText(act, "Ошибка загрузки видео", android.widget.Toast.LENGTH_LONG).show()
+                                    android.widget.Toast.makeText(act, "Ошибка загрузки видео (${res.second})", android.widget.Toast.LENGTH_LONG).show()
                                 }
                             }
                         }.start()
@@ -394,6 +443,7 @@ private fun Composer(act: MainActivity) {
                     }
                 } else {
                     loadFeed(act)
+                    onDone()
                 }
             }
         }
