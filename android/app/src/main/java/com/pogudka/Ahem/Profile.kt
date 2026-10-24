@@ -263,6 +263,7 @@ internal fun DialogHost(act: MainActivity) {
         "post" -> PostDetailDialog(act, act.dialogArg.value)
         "viewer" -> ViewerDialog(act)
         "video" -> VideoPlayerDialog(act, act.dialogArg.value)
+        "editor" -> PostEditorDialog(act)
     }
 }
 
