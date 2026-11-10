@@ -1,8 +1,5 @@
 package com.pogudka.Ahem
 
-import android.graphics.Bitmap
-import android.net.Uri
-import android.util.Base64
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -64,7 +61,6 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -73,22 +69,13 @@ import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.MutableData
 import com.google.firebase.database.Transaction
 import com.google.firebase.database.ValueEventListener
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.withContext
-import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.hypot
 
 private val nickRegex = Regex("^[A-Za-z0-9_]{5,20}$")
-
-private const val VIDEO_UPLOAD_URL = "https://catbox.moe/user/api.php"
-private const val VIDEO_UPLOAD_URL2 = "https://pixeldrain.com/api/file"
-private const val VIDEO_UPLOAD_URL3 = "https://0x0.st"
-private const val VIDEO_MAX_BYTES = 200L * 1024 * 1024
-private const val VIDEO_UA = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
 
 internal fun loadFeed(act: MainActivity, onDone: (() -> Unit)? = null) {
     act.feedGen += 1
@@ -164,89 +151,6 @@ internal fun incViews(act: MainActivity, postId: String) {
             act.optViews.remove(postId); act.statsVer.value++
         }
     }
-}
-
-private fun uploadFromFile(
-    urlStr: String, fields: List<Pair<String, String>>, fileField: String, fileName: String, mime: String,
-    f: File, onProgress: (Float) -> Unit
-): Pair<Int, String> {
-    val boundary = "----ahem" + System.currentTimeMillis()
-    val conn = java.net.URL(urlStr).openConnection() as java.net.HttpURLConnection
-    conn.requestMethod = "POST"
-    conn.doOutput = true
-    conn.connectTimeout = 30000
-    conn.readTimeout = 300000
-    conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
-    conn.setRequestProperty("User-Agent", VIDEO_UA)
-    conn.setRequestProperty("Accept", "*/*")
-    val head = StringBuilder()
-    for ((k, v) in fields) head.append("--").append(boundary).append("\r\nContent-Disposition: form-data; name=\"").append(k).append("\"\r\n\r\n").append(v).append("\r\n")
-    head.append("--").append(boundary).append("\r\nContent-Disposition: form-data; name=\"").append(fileField).append("\"; filename=\"").append(fileName).append("\"\r\nContent-Type: ").append(mime).append("\r\n\r\n")
-    val headBytes = head.toString().toByteArray(Charsets.UTF_8)
-    val footBytes = "\r\n--$boundary--\r\n".toByteArray(Charsets.UTF_8)
-    val size = f.length()
-    conn.setFixedLengthStreamingMode(headBytes.size.toLong() + size + footBytes.size.toLong())
-    val out = conn.outputStream
-    out.write(headBytes)
-    val ins = f.inputStream()
-    val buf = ByteArray(64 * 1024)
-    var total = 0L
-    var r = ins.read(buf)
-    while (r > 0) {
-        out.write(buf, 0, r)
-        total += r
-        if (size > 0) onProgress((total.toFloat() / size.toFloat()).coerceIn(0f, 1f))
-        r = ins.read(buf)
-    }
-    ins.close()
-    out.write(footBytes)
-    out.flush(); out.close()
-    val code = conn.responseCode
-    val body = if (code in 200..299) conn.inputStream.bufferedReader().readText() else (conn.errorStream?.bufferedReader()?.readText() ?: "")
-    conn.disconnect()
-    return Pair(code, body)
-}
-
-private fun uploadVideo(act: MainActivity, uri: Uri, name: String, onProgress: (Float) -> Unit): Pair<String?, String> {
-    val f = File(act.cacheDir, "upload_" + System.currentTimeMillis() + ".mp4")
-    val copied = try {
-        val ins = act.contentResolver.openInputStream(uri)
-        if (ins != null) {
-            ins.use { i ->
-                f.outputStream().use { os ->
-                    i.copyTo(os, 64 * 1024)
-                }
-            }
-            true
-        } else {
-            false
-        }
-    } catch (t: Throwable) {
-        false
-    }
-    if (!copied || !f.exists() || f.length() <= 0) { f.delete(); return Pair(null, "файл не читается") }
-    if (f.length() > VIDEO_MAX_BYTES) { f.delete(); return Pair(null, "больше 200 МБ") }
-    val errors = StringBuilder()
-    try {
-        val (c, b) = uploadFromFile(VIDEO_UPLOAD_URL, listOf("reqtype" to "fileupload"), "fileToUpload", name, "video/mp4", f, onProgress)
-        if (c == 200 && b.trim().startsWith("http")) { f.delete(); return Pair(b.trim(), "") }
-        errors.append("catbox:$c ")
-    } catch (t: Throwable) { errors.append("catbox:err ") }
-    try {
-        val (c, b) = uploadFromFile(VIDEO_UPLOAD_URL2, listOf("name" to name), "file", name, "video/mp4", f, onProgress)
-        if (c in 200..299) {
-            val m = Regex("\"id\"\\s*:\\s*\"([^\"]+)\"").find(b)
-            if (m != null) { f.delete(); return Pair("https://pixeldrain.com/api/file/" + m.groupValues[1], "") }
-        }
-        errors.append("pixeldrain:$c ")
-    } catch (t: Throwable) { errors.append("pixeldrain:err ") }
-    try {
-        val (c, b) = uploadFromFile(VIDEO_UPLOAD_URL3, emptyList(), "file", name, "video/mp4", f, onProgress)
-        if (c == 200 && b.trim().startsWith("http")) { f.delete(); return Pair(b.trim(), "") }
-        errors.append("0x0:$c ")
-    } catch (t: Throwable) { errors.append("0x0:err ") }
-    f.delete()
-    return Pair(null, errors.toString().trim())
 }
 
 @OptIn(ExperimentalMaterialApi::class)
@@ -364,9 +268,6 @@ private fun SearchRow(act: MainActivity) {
 @Composable
 private fun Composer(act: MainActivity, onDone: () -> Unit = {}) {
     val txt = remember { mutableStateOf("") }
-    val videoUri by act.pendingVideoUri
-    var uploading by remember { mutableStateOf(false) }
-    var progress by remember { mutableStateOf(0f) }
     Column(Modifier.fillMaxSize()) {
         Column(
             Modifier.weight(1f).fillMaxWidth()
@@ -383,31 +284,13 @@ private fun Composer(act: MainActivity, onDone: () -> Unit = {}) {
                     value = txt.value, onValueChange = { txt.value = it },
                     textStyle = TextStyle(color = ic(P.text), fontSize = 15.sp, fontFamily = fontUbuntuReg),
                     modifier = Modifier.fillMaxWidth().heightIn(min = 110.dp),
-                    decorationBox = { inner -> if (txt.value.isEmpty()) Text("Подпись к посту (до 4 фото + видео до 200 МБ)", color = ic(P.textSec), fontSize = 15.sp); inner() }
+                    decorationBox = { inner -> if (txt.value.isEmpty()) Text("Подпись к посту (до 4 фото)", color = ic(P.textSec), fontSize = 15.sp); inner() }
                 )
             }
             Spacer(Modifier.height(12.dp))
             if (act.pendingImages.isNotEmpty()) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     for (im in act.pendingImages.toList()) Thumb(im, 72)
-                }
-                Spacer(Modifier.height(12.dp))
-            }
-            if (videoUri != null) {
-                Row(
-                    Modifier.fillMaxWidth()
-                        .background(ic(P.fieldBg), RoundedCornerShape(12.dp))
-                        .border(1.dp, ic(P.border), RoundedCornerShape(12.dp))
-                        .padding(10.dp, 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    VideoThumb(videoUri!!, 72)
-                    Spacer(Modifier.width(10.dp))
-                    Text(
-                        if (uploading) "Загрузка видео ${(progress * 100).toInt()}%" else "Видео выбрано",
-                        color = ic(P.textSec), fontSize = 13.sp, modifier = Modifier.weight(1f)
-                    )
-                    if (!uploading) GlassIconButton(R.drawable.ic_close, Modifier.size(28.dp)) { act.pendingVideoUri.value = null }
                 }
             }
         }
@@ -416,14 +299,10 @@ private fun Composer(act: MainActivity, onDone: () -> Unit = {}) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             GlassIconButton(R.drawable.ic_camera) { pickImages(act) }
-            Spacer(Modifier.width(8.dp))
-            GlassIconButton(R.drawable.ic_video) { pickVideo(act) }
             Spacer(Modifier.width(10.dp))
-            AccentButton(if (uploading) "Загрузка ${(progress * 100).toInt()}%" else "Опубликовать", Modifier.weight(1f)) {
-                if (uploading) return@AccentButton
+            AccentButton("Опубликовать", Modifier.weight(1f)) {
                 val text = txt.value
-                val vUri = videoUri
-                if (text.isEmpty() && act.pendingImages.isEmpty() && vUri == null) return@AccentButton
+                if (text.isEmpty() && act.pendingImages.isEmpty()) return@AccentButton
                 val postId = act.database.child("posts").push().key ?: return@AccentButton
                 val post = HashMap<String, Any>()
                 post["authorId"] = act.currentUserId
@@ -435,6 +314,7 @@ private fun Composer(act: MainActivity, onDone: () -> Unit = {}) {
                     val joined = act.pendingImages.joinToString(",")
                     act.mediaCache[postId] = joined
                     act.database.child("postMedia").child(postId).setValue(joined)
+                    act.database.child("posts").child(postId).child("mediaSize").setValue(joined.length.toLong())
                 }
                 val stats = HashMap<String, Any>()
                 stats["likes"] = 0; stats["views"] = 0
@@ -442,31 +322,8 @@ private fun Composer(act: MainActivity, onDone: () -> Unit = {}) {
                 act.database.child("postStats").child(postId).setValue(stats)
                 txt.value = ""
                 act.pendingImages.clear()
-                act.pendingVideoUri.value = null
-                if (vUri != null) {
-                    uploading = true
-                    progress = 0f
-                    Thread {
-                        val res = try {
-                            uploadVideo(act, vUri, "ahem_$postId.mp4") { p -> act.uiHandler.post { progress = p } }
-                        } catch (t: Throwable) { Pair(null, "сбой потока") }
-                        act.uiHandler.post {
-                            uploading = false
-                            val url = res.first
-                            if (url != null) {
-                                act.database.child("posts").child(postId).child("videoUrl").setValue(url).addOnCompleteListener {
-                                    loadFeed(act)
-                                    onDone()
-                                }
-                            } else {
-                                android.widget.Toast.makeText(act, "Ошибка загрузки видео: ${res.second}", android.widget.Toast.LENGTH_LONG).show()
-                            }
-                        }
-                    }.start()
-                } else {
-                    loadFeed(act)
-                    onDone()
-                }
+                loadFeed(act)
+                onDone()
             }
         }
     }
@@ -486,38 +343,11 @@ private fun Thumb(b64: String, dpSize: Int) {
 }
 
 @Composable
-private fun VideoThumb(uri: Uri, dpSize: Int) {
-    val ctx = LocalContext.current
-    var bmp by remember(uri) { mutableStateOf<Bitmap?>(null) }
-    LaunchedEffect(uri) {
-        bmp = withContext(Dispatchers.Default) {
-            try {
-                val mr = android.media.MediaMetadataRetriever()
-                mr.setDataSource(ctx, uri)
-                val fr = mr.getFrameAtTime(0L)
-                mr.release()
-                fr
-            } catch (t: Throwable) { null }
-        }
-    }
-    Box(
-        Modifier.size(dpSize.dp).clip(RoundedCornerShape(12.dp)).background(Color.Black)
-            .border(1.dp, ic(P.border), RoundedCornerShape(12.dp)),
-        contentAlignment = Alignment.Center
-    ) {
-        val b = bmp
-        if (b != null) Image(bitmap = b.asImageBitmap(), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-        else Icon(painter = painterResource(R.drawable.ic_video), contentDescription = null, tint = Color.White, modifier = Modifier.size(24.dp))
-    }
-}
-
-@Composable
 internal fun PostCard(act: MainActivity, post: DataSnapshot) {
     val postId = post.key ?: ""
     val authorId = post.child("authorId").getValue(String::class.java) ?: ""
     val authorNick = post.child("authorNick").getValue(String::class.java) ?: "?"
     val text = post.child("text").getValue(String::class.java) ?: ""
-    val videoUrl = post.child("videoUrl").getValue(String::class.java) ?: ""
     val ts = getTs(post)
     val ver by act.statsVer
     val stats = remember(postId, ver) { act.statsMap[postId] }
@@ -538,8 +368,7 @@ internal fun PostCard(act: MainActivity, post: DataSnapshot) {
             }
         }
         if (text.isNotEmpty()) LinkText(text, color = ic(P.text), fontSize = 15.sp, modifier = Modifier.fillMaxWidth().padding(14.dp, 0.dp, 14.dp, 12.dp))
-        MediaBlock(act, postId)
-        if (videoUrl.isNotEmpty()) VideoBlock { act.dialogArg.value = videoUrl; act.dialog.value = "video" }
+        MediaBlock(act, postId, (post.child("mediaSize").value as? Number)?.toLong() ?: 0L)
         Row(Modifier.fillMaxWidth().padding(14.dp, 4.dp, 14.dp, 12.dp), verticalAlignment = Alignment.CenterVertically) {
             Row(Modifier.clickable { toggleLike(act, postId) }, verticalAlignment = Alignment.CenterVertically) {
                 Icon(painter = painterResource(if (liked) R.drawable.ic_heart else R.drawable.ic_heart_outline), contentDescription = null, tint = if (liked) ic(P.heartOn) else ic(P.textSec), modifier = Modifier.size(22.dp))
@@ -559,80 +388,11 @@ internal fun PostCard(act: MainActivity, post: DataSnapshot) {
 }
 
 @Composable
-private fun VideoBlock(onOpen: () -> Unit) {
-    Box(
-        Modifier.fillMaxWidth().height(200.dp).padding(14.dp, 0.dp, 14.dp, 12.dp)
-            .clip(RoundedCornerShape(14.dp)).background(Color.Black)
-            .clickable { onOpen() },
-        contentAlignment = Alignment.Center
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(painter = painterResource(R.drawable.ic_video), contentDescription = null, tint = Color.White, modifier = Modifier.size(44.dp))
-            Spacer(Modifier.height(6.dp))
-            Text("Смотреть видео", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-        }
-    }
-}
-
-@Composable
-internal fun VideoPlayerDialog(act: MainActivity, url: String) {
-    var localPath by remember(url) { mutableStateOf<String?>(null) }
-    var err by remember(url) { mutableStateOf("") }
-    LaunchedEffect(url) {
-        err = ""
-        if (url.startsWith("rtdb:")) {
-            val postId = url.removePrefix("rtdb:")
-            val f = File(act.cacheDir, "v_$postId.mp4")
-            if (f.exists() && f.length() > 0) {
-                localPath = f.absolutePath
-            } else {
-                try {
-                    val s = awaitOnce(act.database.child("postVideos").child(postId))
-                    val sb = StringBuilder()
-                    s.children.sortedBy { it.key ?: "" }.forEach { sb.append(it.getValue(String::class.java) ?: "") }
-                    if (sb.isEmpty()) { err = "Видео не найдено"; return@LaunchedEffect }
-                    val bytes = Base64.decode(sb.toString(), Base64.NO_WRAP)
-                    f.writeBytes(bytes)
-                    localPath = f.absolutePath
-                } catch (t: Throwable) {
-                    err = "Не удалось загрузить видео"
-                }
-            }
-        } else {
-            localPath = null
-        }
-    }
-    Dialog(onDismissRequest = { act.dialog.value = null }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Box(Modifier.fillMaxSize().background(Color.Black)) {
-            val src = if (url.startsWith("rtdb:")) localPath else url
-            if (src != null) {
-                AndroidView(
-                    factory = { ctx ->
-                        android.widget.VideoView(ctx).apply {
-                            if (url.startsWith("rtdb:")) setVideoPath(src) else setVideoURI(Uri.parse(src))
-                            val mc = android.widget.MediaController(ctx)
-                            mc.setAnchorView(this)
-                            setMediaController(mc)
-                            start()
-                        }
-                    },
-                    onRelease = { try { it.stopPlayback() } catch (t: Throwable) {} },
-                    modifier = Modifier.fillMaxSize()
-                )
-            } else if (err.isNotEmpty()) {
-                Text(err, color = Color.White, fontSize = 14.sp, modifier = Modifier.align(Alignment.Center))
-            } else {
-                Text("Загрузка видео...", color = Color.White, fontSize = 14.sp, modifier = Modifier.align(Alignment.Center))
-            }
-            GlassIconButton(R.drawable.ic_close, Modifier.align(Alignment.TopEnd).padding(14.dp)) { act.dialog.value = null }
-        }
-    }
-}
-
-@Composable
-private fun MediaBlock(act: MainActivity, postId: String) {
+private fun MediaBlock(act: MainActivity, postId: String, mediaSize: Long) {
     var str by remember(postId) { mutableStateOf<String?>(act.mediaCache[postId]) }
-    LaunchedEffect(postId) {
+    var wantLoad by remember(postId) { mutableStateOf(false) }
+    LaunchedEffect(postId, wantLoad) {
+        if (!wantLoad) return@LaunchedEffect
         if (act.mediaCache.containsKey(postId)) { str = act.mediaCache[postId]; return@LaunchedEffect }
         try {
             val s = awaitOnce(act.database.child("postMedia").child(postId))
@@ -640,6 +400,23 @@ private fun MediaBlock(act: MainActivity, postId: String) {
             act.mediaCache[postId] = v
             str = v
         } catch (t: Throwable) { str = "" }
+    }
+    if (!wantLoad && str == null) {
+        val mb = if (mediaSize > 0) " (~" + ((mediaSize / 1024 / 1024).coerceAtLeast(1L)) + " МБ)" else ""
+        Box(
+            Modifier.fillMaxWidth().height(84.dp).padding(14.dp, 0.dp, 14.dp, 12.dp)
+                .clip(RoundedCornerShape(14.dp)).background(ic(P.surface))
+                .border(1.dp, ic(P.border), RoundedCornerShape(14.dp))
+                .clickable { wantLoad = true },
+            contentAlignment = Alignment.Center
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(painter = painterResource(R.drawable.ic_camera), contentDescription = null, tint = ic(P.textSec), modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Фото: показать$mb", color = ic(P.textSec), fontSize = 14.sp)
+            }
+        }
+        return
     }
     val images = (str ?: "").split(",").filter { it.isNotEmpty() }
     if (images.isEmpty()) return
@@ -835,13 +612,6 @@ private fun pickImages(act: MainActivity) {
     intent.type = "image/*"
     intent.putExtra(android.content.Intent.EXTRA_ALLOW_MULTIPLE, true)
     act.startActivityForResult(android.content.Intent.createChooser(intent, "Выбери фото"), act.PICK_IMAGES)
-}
-
-private fun pickVideo(act: MainActivity) {
-    val intent = android.content.Intent(android.content.Intent.ACTION_GET_CONTENT)
-    intent.type = "video/*"
-    intent.addCategory(android.content.Intent.CATEGORY_OPENABLE)
-    act.startActivityForResult(intent, act.PICK_VIDEO)
 }
 
 @Composable
