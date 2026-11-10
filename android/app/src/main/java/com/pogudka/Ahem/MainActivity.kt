@@ -2,7 +2,9 @@ package com.pogudka.Ahem
 
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
 import android.graphics.Typeface
+import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -59,6 +61,10 @@ class MainActivity : ComponentActivity() {
 
     internal val avatarCache = mutableStateOf(HashMap<String, String>())
     internal val mediaCache = HashMap<String, String>()
+    // LRU-кэш декодированных Bitmap: пост ушёл с экрана -> картинка не передекодируется при возврате
+    internal val bmpCache: LinkedHashMap<String, Bitmap> = object : LinkedHashMap<String, Bitmap>(24, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Bitmap>): Boolean = size > 24
+    }
 
     internal val sessionUid = mutableStateOf("")
     internal var currentUserId: String
@@ -73,7 +79,6 @@ class MainActivity : ComponentActivity() {
     internal val viewerImages = mutableStateOf<List<String>>(emptyList())
     internal val viewerStart = mutableStateOf(0)
     internal val refreshing = mutableStateOf(false)
-    internal val splash = mutableStateOf(true)
 
     internal var currentNick = ""
     internal var currentEmail = ""
@@ -150,6 +155,7 @@ class MainActivity : ComponentActivity() {
             myFollowingIds.clear(); viewedLocally.clear(); statsMap.clear(); statsVer.value++
             optLiked.clear(); optCount.clear(); optViews.clear()
             postsRaw.clear(); pendingImages.clear(); peersList.clear(); chatMsgs.clear()
+            bmpCache.clear()
             profTarget.value = ""; profNick.value = ""; profName.value = ""; profBio.value = ""
             profAvatarB64.value = ""; editAvatarB64.value = ""
             profFollowers.value = 0L; profFollowing.value = 0L
@@ -222,13 +228,12 @@ private fun AhemRoot(act: MainActivity) {
     val dlg by act.dialog
     val pt by act.profTarget
     val me by act.sessionUid
-    val splash by act.splash
+    val splash by remember(act) { mutableStateOf(true) }
     val icons = intArrayOf(R.drawable.ic_feed, R.drawable.ic_video, R.drawable.ic_chat, R.drawable.ic_profile)
     val showPanel = panel && !(t == 2 && chatOpen)
 
     LaunchedEffect(Unit) {
         delay(1400)
-        act.splash.value = false
     }
 
     BackHandler(enabled = dlg != null || chatOpen || (t == 3 && pt.isNotEmpty() && pt != me)) {
