@@ -3,7 +3,6 @@ package com.pogudka.Ahem
 import android.content.Context
 import android.content.Intent
 import android.graphics.Typeface
-import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -74,7 +73,6 @@ class MainActivity : ComponentActivity() {
     internal val viewerImages = mutableStateOf<List<String>>(emptyList())
     internal val viewerStart = mutableStateOf(0)
     internal val refreshing = mutableStateOf(false)
-    internal val pendingVideoUri = mutableStateOf<Uri?>(null)
     internal val splash = mutableStateOf(true)
 
     internal var currentNick = ""
@@ -124,7 +122,6 @@ class MainActivity : ComponentActivity() {
 
     internal val PICK_IMAGES = 1002
     internal val PICK_AVATAR = 1003
-    internal val PICK_VIDEO = 1004
     internal val ZOOM_MAX = 3f
     internal val FEED_LIMIT = 40
 
@@ -153,7 +150,6 @@ class MainActivity : ComponentActivity() {
             myFollowingIds.clear(); viewedLocally.clear(); statsMap.clear(); statsVer.value++
             optLiked.clear(); optCount.clear(); optViews.clear()
             postsRaw.clear(); pendingImages.clear(); peersList.clear(); chatMsgs.clear()
-            pendingVideoUri.value = null
             profTarget.value = ""; profNick.value = ""; profName.value = ""; profBio.value = ""
             profAvatarB64.value = ""; editAvatarB64.value = ""
             profFollowers.value = 0L; profFollowing.value = 0L
