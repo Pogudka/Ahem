@@ -314,7 +314,6 @@ private fun Composer(act: MainActivity, onDone: () -> Unit = {}) {
                     val joined = act.pendingImages.joinToString(",")
                     act.mediaCache[postId] = joined
                     act.database.child("postMedia").child(postId).setValue(joined)
-                    act.database.child("posts").child(postId).child("mediaSize").setValue(joined.length.toLong())
                 }
                 val stats = HashMap<String, Any>()
                 stats["likes"] = 0; stats["views"] = 0
@@ -368,7 +367,7 @@ internal fun PostCard(act: MainActivity, post: DataSnapshot) {
             }
         }
         if (text.isNotEmpty()) LinkText(text, color = ic(P.text), fontSize = 15.sp, modifier = Modifier.fillMaxWidth().padding(14.dp, 0.dp, 14.dp, 12.dp))
-        MediaBlock(act, postId, (post.child("mediaSize").value as? Number)?.toLong() ?: 0L)
+        MediaBlock(act, postId)
         Row(Modifier.fillMaxWidth().padding(14.dp, 4.dp, 14.dp, 12.dp), verticalAlignment = Alignment.CenterVertically) {
             Row(Modifier.clickable { toggleLike(act, postId) }, verticalAlignment = Alignment.CenterVertically) {
                 Icon(painter = painterResource(if (liked) R.drawable.ic_heart else R.drawable.ic_heart_outline), contentDescription = null, tint = if (liked) ic(P.heartOn) else ic(P.textSec), modifier = Modifier.size(22.dp))
@@ -388,11 +387,10 @@ internal fun PostCard(act: MainActivity, post: DataSnapshot) {
 }
 
 @Composable
-private fun MediaBlock(act: MainActivity, postId: String, mediaSize: Long) {
-    var str by remember(postId) { mutableStateOf<String?>(act.mediaCache[postId]) }
-    var wantLoad by remember(postId) { mutableStateOf(false) }
-    LaunchedEffect(postId, wantLoad) {
-        if (!wantLoad) return@LaunchedEffect
+private fun MediaBlock(act: MainActivity, postId: String) {
+    var str by remember(postId) { mutableStateOf(act.mediaCache[postId]) }
+    LaunchedEffect(postId) {
+        if (str != null) return@LaunchedEffect
         if (act.mediaCache.containsKey(postId)) { str = act.mediaCache[postId]; return@LaunchedEffect }
         try {
             val s = awaitOnce(act.database.child("postMedia").child(postId))
@@ -400,23 +398,6 @@ private fun MediaBlock(act: MainActivity, postId: String, mediaSize: Long) {
             act.mediaCache[postId] = v
             str = v
         } catch (t: Throwable) { str = "" }
-    }
-    if (!wantLoad && str == null) {
-        val mb = if (mediaSize > 0) " (~" + ((mediaSize / 1024 / 1024).coerceAtLeast(1L)) + " МБ)" else ""
-        Box(
-            Modifier.fillMaxWidth().height(84.dp).padding(14.dp, 0.dp, 14.dp, 12.dp)
-                .clip(RoundedCornerShape(14.dp)).background(ic(P.surface))
-                .border(1.dp, ic(P.border), RoundedCornerShape(14.dp))
-                .clickable { wantLoad = true },
-            contentAlignment = Alignment.Center
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(painter = painterResource(R.drawable.ic_camera), contentDescription = null, tint = ic(P.textSec), modifier = Modifier.size(20.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("Фото: показать$mb", color = ic(P.textSec), fontSize = 14.sp)
-            }
-        }
-        return
     }
     val images = (str ?: "").split(",").filter { it.isNotEmpty() }
     if (images.isEmpty()) return
