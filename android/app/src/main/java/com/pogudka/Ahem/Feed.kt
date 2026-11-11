@@ -290,7 +290,7 @@ private fun Composer(act: MainActivity, onDone: () -> Unit = {}) {
             Spacer(Modifier.height(12.dp))
             if (act.pendingImages.isNotEmpty()) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    for (im in act.pendingImages.toList()) Thumb(im, 72)
+                    for ((i, im) in act.pendingImages.toList().withIndex()) Thumb(im, 72, "pending:$i")
                 }
             }
         }
@@ -329,10 +329,10 @@ private fun Composer(act: MainActivity, onDone: () -> Unit = {}) {
 }
 
 @Composable
-private fun Thumb(b64: String, dpSize: Int) {
+private fun Thumb(b64: String, dpSize: Int, key: String = "") {
     val ctx = LocalContext.current
     val px = (dpSize * ctx.resources.displayMetrics.density).toInt().coerceAtLeast(2)
-    val shown = rememberDecoded(b64, px)
+    val shown = rememberDecoded(b64, px, if (key.isEmpty()) null else key)
     Box(
         Modifier.size(dpSize.dp).clip(RoundedCornerShape(12.dp))
             .background(ic(P.surface)).border(1.dp, ic(P.border), RoundedCornerShape(12.dp))
@@ -403,24 +403,24 @@ private fun MediaBlock(act: MainActivity, postId: String) {
     if (images.isEmpty()) return
     val ctx = LocalContext.current
     val imgW = ctx.resources.displayMetrics.widthPixels - act.dp(28)
-    if (images.size == 1) SingleImage(act, images[0], imgW, images, 0) else GridImages(act, images, imgW)
+    if (images.size == 1) SingleImage(act, images[0], imgW, images, 0, "$postId:0") else GridImages(act, images, imgW, postId)
 }
 
 @Composable
-private fun SingleImage(act: MainActivity, b64: String, px: Int, all: List<String>, start: Int) {
-    val shown = rememberDecoded(b64, px) ?: return
+private fun SingleImage(act: MainActivity, b64: String, px: Int, all: List<String>, start: Int, key: String = "") {
+    val shown = rememberDecoded(b64, px, if (key.isEmpty()) null else key)
     val hDp = (px / act.resources.displayMetrics.density)
     Box(
         Modifier.fillMaxWidth().height(hDp.dp).padding(14.dp, 0.dp, 14.dp, 12.dp)
             .clip(RoundedCornerShape(14.dp)).background(ic(P.surface))
             .clickable { openViewer(act, all, start) }
     ) {
-        Image(bitmap = shown.asImageBitmap(), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+        if (shown != null) Image(bitmap = shown.asImageBitmap(), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
     }
 }
 
 @Composable
-private fun GridImages(act: MainActivity, images: List<String>, imgW: Int) {
+private fun GridImages(act: MainActivity, images: List<String>, imgW: Int, postId: String) {
     val cell = (imgW - act.dp(4)) / 2
     val cellDp = (cell / act.resources.displayMetrics.density)
     Column(Modifier.fillMaxWidth().padding(14.dp, 0.dp, 14.dp, 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -429,7 +429,7 @@ private fun GridImages(act: MainActivity, images: List<String>, imgW: Int) {
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 for (c in 0 until 2) {
                     val idx = i + c
-                    if (idx < images.size) GridCell(act, images[idx], cell, cellDp, images, idx, Modifier.weight(1f))
+                    if (idx < images.size) GridCell(act, images[idx], cell, cellDp, images, idx, Modifier.weight(1f), "$postId:$idx")
                     else Spacer(Modifier.weight(1f).height(cellDp.dp))
                 }
             }
@@ -439,8 +439,8 @@ private fun GridImages(act: MainActivity, images: List<String>, imgW: Int) {
 }
 
 @Composable
-private fun GridCell(act: MainActivity, b64: String, px: Int, cellDp: Float, all: List<String>, idx: Int, modifier: Modifier = Modifier) {
-    val shown = rememberDecoded(b64, px)
+private fun GridCell(act: MainActivity, b64: String, px: Int, cellDp: Float, all: List<String>, idx: Int, modifier: Modifier = Modifier, key: String = "") {
+    val shown = rememberDecoded(b64, px, if (key.isEmpty()) null else key)
     Box(
         modifier.height(cellDp.dp).clip(RoundedCornerShape(12.dp)).background(ic(P.surface))
             .clickable { openViewer(act, all, idx) }
@@ -483,7 +483,7 @@ internal fun ViewerDialog(act: MainActivity) {
     val pager = rememberPagerState(initialPage = act.viewerStart.value.coerceIn(0, images.size - 1)) { images.size }
     Dialog(onDismissRequest = { act.dialog.value = null }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Box(Modifier.fillMaxSize().background(Color.Black)) {
-            HorizontalPager(state = pager, modifier = Modifier.fillMaxSize()) { page -> ZoomImage(images[page]) }
+            HorizontalPager(state = pager, modifier = Modifier.fillMaxSize()) { page -> ZoomImage(images[page], "zoom:$page") }
             Text(
                 "${pager.currentPage + 1} / ${images.size}",
                 color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium,
@@ -494,16 +494,16 @@ internal fun ViewerDialog(act: MainActivity) {
 }
 
 @Composable
-private fun ZoomImage(b64: String) {
+private fun ZoomImage(b64: String, key: String = "") {
     val ctx = LocalContext.current
     val req = maxOf(ctx.resources.displayMetrics.widthPixels, ctx.resources.displayMetrics.heightPixels)
-    val shown = rememberDecoded(b64, req)
-    var scale by remember(b64) { mutableStateOf(1f) }
-    var t by remember(b64) { mutableStateOf(Offset.Zero) }
+    val shown = rememberDecoded(b64, req, if (key.isEmpty()) null else key)
+    var scale by remember(key) { mutableStateOf(1f) }
+    var t by remember(key) { mutableStateOf(Offset.Zero) }
     Box(
         Modifier
             .fillMaxSize()
-            .pointerInput(b64) {
+            .pointerInput(key) {
                 detectTapGestures(onDoubleTap = { q ->
                     if (scale > 1.05f) {
                         scale = 1f; t = Offset.Zero
@@ -515,7 +515,7 @@ private fun ZoomImage(b64: String) {
                     }
                 })
             }
-            .pointerInput(b64) {
+            .pointerInput(key) {
                 awaitEachGesture {
                     awaitFirstDown(requireUnconsumed = false)
                     var prevC = Offset.Zero
