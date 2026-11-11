@@ -34,6 +34,8 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
@@ -49,14 +51,13 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
 
-// Шрифты
-internal val fontUnbounded = androidx.compose.ui.text.font.FontFamily.Default
-internal val fontUbuntuReg = androidx.compose.ui.text.font.FontFamily.Default
+// Твои шрифты
+internal val fontUnbounded = FontFamily(Font(R.font.unbounded))
+internal val fontUbuntuReg = FontFamily(Font(R.font.ubuntu_regular))
 
 // ic(Int) — в LiquidGlass.kt; P/fmtNum/getTs/isDark/applyTheme/dbDenied/decodeScaled — в Theme.kt;
 // readOnce/readStatsInto/txWithRetry/scheduleMigration — в Stats.kt; Msg/PeerRow/чаты — в Chats.kt;
 // Acc/аккаунты — в Account.kt; VideoScreen — в Video.kt; LiquidGlass — в LiquidGlass.kt.
-// Здесь НИЧЕГО из этого не объявляем.
 
 @Composable
 internal fun CardSurface(modifier: Modifier = Modifier, radius: Int = 18, withBorder: Boolean = true, content: @Composable () -> Unit) {
@@ -64,7 +65,10 @@ internal fun CardSurface(modifier: Modifier = Modifier, radius: Int = 18, withBo
         modifier
             .background(ic(P.surface), RoundedCornerShape(radius.dp))
             .then(if (withBorder) Modifier.border(1.dp, ic(P.border), RoundedCornerShape(radius.dp)) else Modifier)
-    ) { content() }
+    ) {
+        // ВАЖНО: Column, а не Box — иначе шапка/текст/лайки накладываются друг на друга
+        Column(Modifier.fillMaxWidth()) { content() }
+    }
 }
 
 @Composable
@@ -192,7 +196,7 @@ internal fun LinkText(text: String, color: Color, fontSize: TextUnit, modifier: 
     val ctx = LocalContext.current
     ClickableText(
         text = annotated,
-        style = TextStyle(color = color, fontSize = fontSize),
+        style = TextStyle(color = color, fontSize = fontSize, fontFamily = fontUbuntuReg),
         modifier = modifier,
         onClick = { off ->
             annotated.getStringAnnotations("URL", off, off).firstOrNull()?.let {
