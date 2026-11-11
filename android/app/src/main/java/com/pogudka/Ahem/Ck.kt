@@ -1,6 +1,9 @@
 package com.pogudka.Ahem
 
+import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.net.Uri
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -49,14 +52,15 @@ import com.google.firebase.database.ValueEventListener
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.FileOutputStream
 import kotlin.coroutines.resume
 
 // Твои шрифты
 internal val fontUnbounded = FontFamily(Font(R.font.unbounded))
 internal val fontUbuntuReg = FontFamily(Font(R.font.ubuntu_regular))
 
-// Параллельный декод (не ограничиваем 2 потоками — картинки появляются без задержки)
-private val decodePool = Dispatchers.Default
+private const val DISK_CACHE_LIMIT = 160
 
 // ic(Int) — в LiquidGlass.kt; P/fmtNum/getTs/isDark/applyTheme/dbDenied/decodeScaled — в Theme.kt;
 // readOnce/readStatsInto/txWithRetry/scheduleMigration — в Stats.kt; Msg/PeerRow/чаты — в Chats.kt;
@@ -163,20 +167,54 @@ internal suspend fun awaitOnce(ref: DatabaseReference): DataSnapshot = suspendCa
     })
 }
 
-// stableKey — стабильный ключ (postId:idx / av:uid / pending:i / zoom:page).
-// Без него считается hashCode мегабайтной строки на каждой рекомпозиции — это и был тормоз.
+private fun diskFile(act: MainActivity, key: String): File {
+    val dir = File(act.cacheDir, "imgcache")
+    if (!dir.exists()) dir.mkdirs()
+    return File(dir, "$key.jpg")
+}
+
+private fun trimDisk(dir: File) {
+    try {
+        val files = dir.listFiles() ?: return
+        if (files.size <= DISK_CACHE_LIMIT) return
+        files.sortBy { it.lastModified() }
+        for (i in 0 until (files.size - DISK_CACHE_LIMIT)) files[i].delete()
+    } catch (e: Exception) {}
+}
+
+// Память -> диск -> декод. Повторный показ не тянет base64 и не декодирует заново.
 @Composable
 internal fun rememberDecoded(b64: String, px: Int, stableKey: String? = null): Bitmap? {
     val act = LocalContext.current as? MainActivity
-    val key = stableKey ?: (b64.hashCode().toString() + ":" + px)
-    var bmp by remember(key) { mutableStateOf<Bitmap?>(act?.bmpCache?.get(key)) }
+    val rawKey = (stableKey ?: b64.hashCode().toString()) + "_" + px
+    val key = rawKey.replace(Regex("[^A-Za-z0-9_\\-]"), "_")
+    var bmp by remember(key) { mutableStateOf(act?.bmpCache?.get(key)) }
     LaunchedEffect(key) {
-        val cached = act?.bmpCache?.get(key)
-        if (cached != null) { bmp = cached; return@LaunchedEffect }
         if (b64.isEmpty()) { bmp = null; return@LaunchedEffect }
-        val d = withContext(decodePool) { decodeScaled(b64, px) }
-        if (d != null) act?.bmpCache?.put(key, d)
-        bmp = d
+        val a = act ?: return@LaunchedEffect
+        val mem = a.bmpCache[key]
+        if (mem != null) { bmp = mem; return@LaunchedEffect }
+        val loaded = withContext(Dispatchers.IO) {
+            val f = diskFile(a, key)
+            if (f.exists() && f.length() > 0) {
+                val d = BitmapFactory.decodeFile(f.absolutePath)
+                if (d != null) return@withContext d
+            }
+            val d = decodeScaled(b64, px)
+            if (d != null) {
+                try {
+                    val tmp = File(f.parentFile, "$key.tmp")
+                    FileOutputStream(tmp).use { d.compress(Bitmap.CompressFormat.JPEG, 88, it) }
+                    tmp.renameTo(f)
+                    trimDisk(f.parentFile!!)
+                } catch (e: Exception) {}
+            }
+            d
+        }
+        if (loaded != null) {
+            a.bmpCache[key] = loaded
+            bmp = loaded
+        }
     }
     return bmp
 }
@@ -206,7 +244,7 @@ internal fun LinkText(text: String, color: Color, fontSize: TextUnit, modifier: 
         onClick = { off ->
             annotated.getStringAnnotations("URL", off, off).firstOrNull()?.let {
                 try {
-                    ctx.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(it.item)))
+                    ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(it.item)))
                 } catch (t: Throwable) {}
             }
         }
