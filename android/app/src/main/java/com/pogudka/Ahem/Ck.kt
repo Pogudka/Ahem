@@ -47,17 +47,17 @@ import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.DatabaseReference
 import com.google.firebase.database.ValueEventListener
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import java.util.concurrent.Executors
 import kotlin.coroutines.resume
 
-// Твои шрифты
 internal val fontUnbounded = FontFamily(Font(R.font.unbounded))
 internal val fontUbuntuReg = FontFamily(Font(R.font.ubuntu_regular))
 
-// ic(Int) — в LiquidGlass.kt; P/fmtNum/getTs/isDark/applyTheme/dbDenied/decodeScaled — в Theme.kt;
-// readOnce/readStatsInto/txWithRetry/scheduleMigration — в Stats.kt; Msg/PeerRow/чаты — в Chats.kt;
-// Acc/аккаунты — в Account.kt; VideoScreen — в Video.kt; LiquidGlass — в LiquidGlass.kt.
+// Пул декода: не больше 2 потоков, чтобы не забивать CPU при скролле
+private val decodePool = Executors.newFixedThreadPool(2).asCoroutineDispatcher()
 
 @Composable
 internal fun CardSurface(modifier: Modifier = Modifier, radius: Int = 18, withBorder: Boolean = true, content: @Composable () -> Unit) {
@@ -66,7 +66,6 @@ internal fun CardSurface(modifier: Modifier = Modifier, radius: Int = 18, withBo
             .background(ic(P.surface), RoundedCornerShape(radius.dp))
             .then(if (withBorder) Modifier.border(1.dp, ic(P.border), RoundedCornerShape(radius.dp)) else Modifier)
     ) {
-        // ВАЖНО: Column, а не Box — иначе шапка/текст/лайки накладываются друг на друга
         Column(Modifier.fillMaxWidth()) { content() }
     }
 }
@@ -106,8 +105,8 @@ internal fun OutlineButton(text: String, modifier: Modifier = Modifier, onClick:
 }
 
 @Composable
-internal fun Avatar(b64: String, nick: String, sizeDp: Dp) {
-    val shown = if (b64.isNotEmpty()) rememberDecoded(b64, (sizeDp.value * 2).toInt()) else null
+internal fun Avatar(b64: String, nick: String, sizeDp: Dp, stableKey: String? = null) {
+    val shown = if (b64.isNotEmpty()) rememberDecoded(b64, (sizeDp.value * 2).toInt(), stableKey) else null
     Box(
         Modifier.size(sizeDp).clip(CircleShape).background(ic(P.fieldBg)),
         contentAlignment = Alignment.Center
@@ -134,7 +133,7 @@ internal fun AuthorAvatar(userId: String, nick: String, sizeDp: Dp) {
             } catch (t: Throwable) {}
         }
     }
-    Avatar(b64 ?: "", nick, sizeDp)
+    Avatar(b64 ?: "", nick, sizeDp, "av:$userId")
 }
 
 @Composable
@@ -161,17 +160,17 @@ internal suspend fun awaitOnce(ref: DatabaseReference): DataSnapshot = suspendCa
     })
 }
 
+// stableKey — стабильный ключ (postId:idx / av:uid). Без него считается hashCode строки (дорого).
 @Composable
-internal fun rememberDecoded(b64: String, px: Int): Bitmap? {
-    val ctx = LocalContext.current
-    val act = ctx as? MainActivity
-    val key = b64.hashCode().toString() + ":" + px
+internal fun rememberDecoded(b64: String, px: Int, stableKey: String? = null): Bitmap? {
+    val act = LocalContext.current as? MainActivity
+    val key = stableKey ?: (b64.hashCode().toString() + ":" + px)
     var bmp by remember(key) { mutableStateOf<Bitmap?>(act?.bmpCache?.get(key)) }
     LaunchedEffect(key) {
         val cached = act?.bmpCache?.get(key)
         if (cached != null) { bmp = cached; return@LaunchedEffect }
         if (b64.isEmpty()) { bmp = null; return@LaunchedEffect }
-        val d = withContext(Dispatchers.Default) { decodeScaled(b64, px) }
+        val d = withContext(decodePool) { decodeScaled(b64, px) }
         if (d != null) act?.bmpCache?.put(key, d)
         bmp = d
     }
