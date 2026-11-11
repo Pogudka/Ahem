@@ -47,17 +47,20 @@ import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.DatabaseReference
 import com.google.firebase.database.ValueEventListener
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
-import java.util.concurrent.Executors
 import kotlin.coroutines.resume
 
+// Твои шрифты
 internal val fontUnbounded = FontFamily(Font(R.font.unbounded))
 internal val fontUbuntuReg = FontFamily(Font(R.font.ubuntu_regular))
 
-// Пул декода: не больше 2 потоков, чтобы не забивать CPU при скролле
-private val decodePool = Executors.newFixedThreadPool(2).asCoroutineDispatcher()
+// Параллельный декод (не ограничиваем 2 потоками — картинки появляются без задержки)
+private val decodePool = Dispatchers.Default
+
+// ic(Int) — в LiquidGlass.kt; P/fmtNum/getTs/isDark/applyTheme/dbDenied/decodeScaled — в Theme.kt;
+// readOnce/readStatsInto/txWithRetry/scheduleMigration — в Stats.kt; Msg/PeerRow/чаты — в Chats.kt;
+// Acc/аккаунты — в Account.kt; VideoScreen — в Video.kt; LiquidGlass — в LiquidGlass.kt.
 
 @Composable
 internal fun CardSurface(modifier: Modifier = Modifier, radius: Int = 18, withBorder: Boolean = true, content: @Composable () -> Unit) {
@@ -160,7 +163,8 @@ internal suspend fun awaitOnce(ref: DatabaseReference): DataSnapshot = suspendCa
     })
 }
 
-// stableKey — стабильный ключ (postId:idx / av:uid). Без него считается hashCode строки (дорого).
+// stableKey — стабильный ключ (postId:idx / av:uid / pending:i / zoom:page).
+// Без него считается hashCode мегабайтной строки на каждой рекомпозиции — это и был тормоз.
 @Composable
 internal fun rememberDecoded(b64: String, px: Int, stableKey: String? = null): Bitmap? {
     val act = LocalContext.current as? MainActivity
@@ -179,18 +183,20 @@ internal fun rememberDecoded(b64: String, px: Int, stableKey: String? = null): B
 
 @Composable
 internal fun LinkText(text: String, color: Color, fontSize: TextUnit, modifier: Modifier = Modifier) {
-    val urlRe = Regex("https?://\\S+")
-    val annotated = buildAnnotatedString {
-        var last = 0
-        for (m in urlRe.findAll(text)) {
-            append(text.substring(last, m.range.first))
-            withStyle(SpanStyle(color = Color(0xFF4A90E2))) {
-                append(text.substring(m.range))
+    val urlRe = remember { Regex("https?://\\S+") }
+    val annotated = remember(text) {
+        buildAnnotatedString {
+            var last = 0
+            for (m in urlRe.findAll(text)) {
+                append(text.substring(last, m.range.first))
+                withStyle(SpanStyle(color = Color(0xFF4A90E2))) {
+                    append(text.substring(m.range))
+                }
+                addStringAnnotation(tag = "URL", annotation = m.value, start = m.range.first, end = m.range.last + 1)
+                last = m.range.last + 1
             }
-            addStringAnnotation(tag = "URL", annotation = m.value, start = m.range.first, end = m.range.last + 1)
-            last = m.range.last + 1
+            append(text.substring(last))
         }
-        append(text.substring(last))
     }
     val ctx = LocalContext.current
     ClickableText(
