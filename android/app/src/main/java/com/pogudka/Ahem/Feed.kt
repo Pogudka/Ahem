@@ -479,6 +479,7 @@ internal fun openViewer(act: MainActivity, images: List<String>, start: Int) {
 @Composable
 internal fun PostDetailDialog(act: MainActivity, postId: String) {
     val post = act.postsRaw.toList().firstOrNull { it.key == postId }
+    val mediaVer by act.statsVer
     LaunchedEffect(postId) { incViews(act, postId) }
     Dialog(onDismissRequest = { act.dialog.value = null }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Column(Modifier.fillMaxSize().background(ic(P.bg))) {
@@ -488,7 +489,7 @@ internal fun PostDetailDialog(act: MainActivity, postId: String) {
                 Text("Пост", color = ic(P.text), fontSize = 17.sp, fontWeight = FontWeight.Bold, fontFamily = fontUnbounded)
             }
             LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(0.dp, 6.dp, 0.dp, 20.dp)) {
-                if (post != null) item { PostCard(act, post) }
+                if (post != null) item(key = "$postId:$mediaVer") { PostCard(act, post) }
                 else item { Text("Не удалось загрузить пост", color = ic(P.textSec), fontSize = 14.sp, modifier = Modifier.padding(14.dp)) }
             }
         }
@@ -517,7 +518,7 @@ internal fun ViewerDialog(act: MainActivity) {
 @Composable
 private fun ZoomImage(b64: String, key: String = "") {
     val ctx = LocalContext.current
-    val req = maxOf(ctx.resources.displayMetrics.widthPixels, ctx.resources.displayMetrics.heightPixels)
+    val req = 1080
     val shown = rememberDecoded(b64, req, if (key.isEmpty()) null else key)
     val stableKey = if (key.contains(":")) key else "${b64.hashCode()}:$key"
     var scale by remember(stableKey) { mutableStateOf(1f) }
