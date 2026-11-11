@@ -4,7 +4,6 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Typeface
-import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -33,6 +32,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -61,7 +62,6 @@ class MainActivity : ComponentActivity() {
 
     internal val avatarCache = mutableStateOf(HashMap<String, String>())
     internal val mediaCache = HashMap<String, String>()
-    // LRU-кэш декодированных Bitmap: пост ушёл с экрана -> картинка не передекодируется при возврате
     internal val bmpCache: LinkedHashMap<String, Bitmap> = object : LinkedHashMap<String, Bitmap>(24, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Bitmap>): Boolean = size > 24
     }
@@ -228,12 +228,13 @@ private fun AhemRoot(act: MainActivity) {
     val dlg by act.dialog
     val pt by act.profTarget
     val me by act.sessionUid
-    val splash by remember(act) { mutableStateOf(true) }
+    var splash by remember { mutableStateOf(true) }
     val icons = intArrayOf(R.drawable.ic_feed, R.drawable.ic_video, R.drawable.ic_chat, R.drawable.ic_profile)
     val showPanel = panel && !(t == 2 && chatOpen)
 
     LaunchedEffect(Unit) {
         delay(1400)
+        splash = false
     }
 
     BackHandler(enabled = dlg != null || chatOpen || (t == 3 && pt.isNotEmpty() && pt != me)) {
