@@ -393,7 +393,6 @@ internal fun PostCard(act: MainActivity, post: DataSnapshot) {
 private fun MediaBlock(act: MainActivity, postId: String, mediaCount: Int) {
     var str by remember(postId) { mutableStateOf(act.mediaCache[postId]) }
     LaunchedEffect(postId) {
-        if (str != null) return@LaunchedEffect
         if (act.mediaCache.containsKey(postId)) { str = act.mediaCache[postId]; return@LaunchedEffect }
         try {
             val s = awaitOnce(act.database.child("postMedia").child(postId))
@@ -406,21 +405,25 @@ private fun MediaBlock(act: MainActivity, postId: String, mediaCount: Int) {
     val ctx = LocalContext.current
     val density = ctx.resources.displayMetrics.density
     val imgW = ctx.resources.displayMetrics.widthPixels - act.dp(28)
-    if (images.isEmpty()) {
-        if (mediaCount > 0) {
-            val cell = (imgW - act.dp(4)) / 2
-            val cellDp = cell / density
-            val rows = (mediaCount + 1) / 2
-            val h = if (mediaCount == 1) imgW / density else (rows * cellDp + (rows - 1) * 4)
-            Box(
-                Modifier.fillMaxWidth().height(h.dp).padding(14.dp, 0.dp, 14.dp, 12.dp)
-                    .clip(RoundedCornerShape(14.dp)).background(ic(P.surface))
-            )
+    
+    val effectiveCount = if (mediaCount > 0) mediaCount else if (str == null) 1 else images.size
+    if (effectiveCount == 0 && str != null) return
+    
+    val cell = (imgW - act.dp(4)) / 2
+    val cellDp = cell / density
+    val rows = (effectiveCount + 1) / 2
+    val h = if (effectiveCount == 1) imgW / density else (rows * cellDp + (rows - 1) * 4)
+    
+    Box(
+        Modifier.fillMaxWidth().height(h.dp).padding(14.dp, 0.dp, 14.dp, 12.dp)
+            .clip(RoundedCornerShape(14.dp)).background(ic(P.surface))
+    ) {
+        if (images.isNotEmpty()) {
+            val decW = (imgW * 0.6f).toInt().coerceAtLeast(360)
+            if (images.size == 1) SingleImage(act, images[0], imgW, decW, images, 0, "$postId:0") 
+            else GridImages(act, images, imgW, postId)
         }
-        return
     }
-    val decW = (imgW * 0.6f).toInt().coerceAtLeast(360)
-    if (images.size == 1) SingleImage(act, images[0], imgW, decW, images, 0, "$postId:0") else GridImages(act, images, imgW, postId)
 }
 
 @Composable
@@ -498,9 +501,10 @@ internal fun ViewerDialog(act: MainActivity) {
     val images = act.viewerImages.value
     if (images.isEmpty()) { LaunchedEffect(Unit) { act.dialog.value = null }; return }
     val pager = rememberPagerState(initialPage = act.viewerStart.value.coerceIn(0, images.size - 1)) { images.size }
+    val postId = act.dialogArg.value
     Dialog(onDismissRequest = { act.dialog.value = null }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Box(Modifier.fillMaxSize().background(Color.Black)) {
-            HorizontalPager(state = pager, modifier = Modifier.fillMaxSize()) { page -> ZoomImage(images[page], "zoom:$page") }
+            HorizontalPager(state = pager, modifier = Modifier.fillMaxSize()) { page -> ZoomImage(images[page], "zoom:$postId:$page") }
             Text(
                 "${pager.currentPage + 1} / ${images.size}",
                 color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium,
@@ -515,12 +519,13 @@ private fun ZoomImage(b64: String, key: String = "") {
     val ctx = LocalContext.current
     val req = maxOf(ctx.resources.displayMetrics.widthPixels, ctx.resources.displayMetrics.heightPixels)
     val shown = rememberDecoded(b64, req, if (key.isEmpty()) null else key)
-    var scale by remember(key) { mutableStateOf(1f) }
-    var t by remember(key) { mutableStateOf(Offset.Zero) }
+    val stableKey = if (key.contains(":")) key else "${b64.hashCode()}:$key"
+    var scale by remember(stableKey) { mutableStateOf(1f) }
+    var t by remember(stableKey) { mutableStateOf(Offset.Zero) }
     Box(
         Modifier
             .fillMaxSize()
-            .pointerInput(key) {
+            .pointerInput(stableKey) {
                 detectTapGestures(onDoubleTap = { q ->
                     if (scale > 1.05f) {
                         scale = 1f; t = Offset.Zero
@@ -532,7 +537,7 @@ private fun ZoomImage(b64: String, key: String = "") {
                     }
                 })
             }
-            .pointerInput(key) {
+            .pointerInput(stableKey) {
                 awaitEachGesture {
                     awaitFirstDown(requireUnconsumed = false)
                     var prevC = Offset.Zero
