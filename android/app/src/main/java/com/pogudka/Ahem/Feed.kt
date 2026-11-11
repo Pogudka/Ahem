@@ -100,6 +100,7 @@ internal fun loadFeed(act: MainActivity, onDone: (() -> Unit)? = null) {
 internal fun enterFeedMode(act: MainActivity) {
     loadFeed(act)
     scheduleMigration(act)
+    schedulePhotoOpt(act)
 }
 
 internal fun toggleLike(act: MainActivity, postId: String) {
@@ -406,7 +407,6 @@ private fun MediaBlock(act: MainActivity, postId: String, mediaCount: Int) {
     val density = ctx.resources.displayMetrics.density
     val imgW = ctx.resources.displayMetrics.widthPixels - act.dp(28)
     if (images.isEmpty()) {
-        // Резервируем высоту сразу по mediaCount, чтобы карточка не прыгала при догрузке
         if (mediaCount > 0) {
             val cell = (imgW - act.dp(4)) / 2
             val cellDp = cell / density
