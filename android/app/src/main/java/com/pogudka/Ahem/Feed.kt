@@ -309,6 +309,7 @@ private fun Composer(act: MainActivity, onDone: () -> Unit = {}) {
                 post["authorNick"] = act.currentNick
                 post["text"] = text
                 post["timestamp"] = System.currentTimeMillis()
+                if (act.pendingImages.isNotEmpty()) post["mediaCount"] = act.pendingImages.size
                 act.database.child("posts").child(postId).setValue(post)
                 if (act.pendingImages.isNotEmpty()) {
                     val joined = act.pendingImages.joinToString(",")
@@ -347,6 +348,7 @@ internal fun PostCard(act: MainActivity, post: DataSnapshot) {
     val authorId = post.child("authorId").getValue(String::class.java) ?: ""
     val authorNick = post.child("authorNick").getValue(String::class.java) ?: "?"
     val text = post.child("text").getValue(String::class.java) ?: ""
+    val mediaCount = (post.child("mediaCount").value as? Number)?.toInt() ?: 0
     val ts = getTs(post)
     val ver by act.statsVer
     val stats = remember(postId, ver) { act.statsMap[postId] }
@@ -367,7 +369,7 @@ internal fun PostCard(act: MainActivity, post: DataSnapshot) {
             }
         }
         if (text.isNotEmpty()) LinkText(text, color = ic(P.text), fontSize = 15.sp, modifier = Modifier.fillMaxWidth().padding(14.dp, 0.dp, 14.dp, 12.dp))
-        MediaBlock(act, postId)
+        MediaBlock(act, postId, mediaCount)
         Row(Modifier.fillMaxWidth().padding(14.dp, 4.dp, 14.dp, 12.dp), verticalAlignment = Alignment.CenterVertically) {
             Row(Modifier.clickable { toggleLike(act, postId) }, verticalAlignment = Alignment.CenterVertically) {
                 Icon(painter = painterResource(if (liked) R.drawable.ic_heart else R.drawable.ic_heart_outline), contentDescription = null, tint = if (liked) ic(P.heartOn) else ic(P.textSec), modifier = Modifier.size(22.dp))
@@ -387,7 +389,7 @@ internal fun PostCard(act: MainActivity, post: DataSnapshot) {
 }
 
 @Composable
-private fun MediaBlock(act: MainActivity, postId: String) {
+private fun MediaBlock(act: MainActivity, postId: String, mediaCount: Int) {
     var str by remember(postId) { mutableStateOf(act.mediaCache[postId]) }
     LaunchedEffect(postId) {
         if (str != null) return@LaunchedEffect
@@ -400,16 +402,31 @@ private fun MediaBlock(act: MainActivity, postId: String) {
         } catch (t: Throwable) { str = "" }
     }
     val images = (str ?: "").split(",").filter { it.isNotEmpty() }
-    if (images.isEmpty()) return
     val ctx = LocalContext.current
+    val density = ctx.resources.displayMetrics.density
     val imgW = ctx.resources.displayMetrics.widthPixels - act.dp(28)
-    if (images.size == 1) SingleImage(act, images[0], imgW, images, 0, "$postId:0") else GridImages(act, images, imgW, postId)
+    if (images.isEmpty()) {
+        // Резервируем высоту сразу по mediaCount, чтобы карточка не прыгала при догрузке
+        if (mediaCount > 0) {
+            val cell = (imgW - act.dp(4)) / 2
+            val cellDp = cell / density
+            val rows = (mediaCount + 1) / 2
+            val h = if (mediaCount == 1) imgW / density else (rows * cellDp + (rows - 1) * 4)
+            Box(
+                Modifier.fillMaxWidth().height(h.dp).padding(14.dp, 0.dp, 14.dp, 12.dp)
+                    .clip(RoundedCornerShape(14.dp)).background(ic(P.surface))
+            )
+        }
+        return
+    }
+    val decW = (imgW * 0.6f).toInt().coerceAtLeast(360)
+    if (images.size == 1) SingleImage(act, images[0], imgW, decW, images, 0, "$postId:0") else GridImages(act, images, imgW, postId)
 }
 
 @Composable
-private fun SingleImage(act: MainActivity, b64: String, px: Int, all: List<String>, start: Int, key: String = "") {
-    val shown = rememberDecoded(b64, px, if (key.isEmpty()) null else key)
-    val hDp = (px / act.resources.displayMetrics.density)
+private fun SingleImage(act: MainActivity, b64: String, displayPx: Int, decodePx: Int, all: List<String>, start: Int, key: String = "") {
+    val shown = rememberDecoded(b64, decodePx, if (key.isEmpty()) null else key)
+    val hDp = (displayPx / act.resources.displayMetrics.density)
     Box(
         Modifier.fillMaxWidth().height(hDp.dp).padding(14.dp, 0.dp, 14.dp, 12.dp)
             .clip(RoundedCornerShape(14.dp)).background(ic(P.surface))
