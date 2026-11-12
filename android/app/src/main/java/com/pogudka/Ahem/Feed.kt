@@ -391,9 +391,11 @@ internal fun PostCard(act: MainActivity, post: DataSnapshot) {
 
 @Composable
 private fun MediaBlock(act: MainActivity, postId: String, mediaCount: Int) {
-    var str by remember(postId) { mutableStateOf(act.mediaCache[postId]) }
-    LaunchedEffect(postId) {
-        if (act.mediaCache.containsKey(postId)) { str = act.mediaCache[postId]; return@LaunchedEffect }
+    // Читаем mediaCache напрямую — это заставляет Compose перерисовать при обновлении
+    val cachedMedia = act.mediaCache[postId]
+    var str by remember(postId) { mutableStateOf(cachedMedia) }
+    LaunchedEffect(postId, cachedMedia) {
+        if (cachedMedia != null) { str = cachedMedia; return@LaunchedEffect }
         try {
             val s = awaitOnce(act.database.child("postMedia").child(postId))
             val v = s.getValue(String::class.java) ?: ""
@@ -479,7 +481,9 @@ internal fun openViewer(act: MainActivity, images: List<String>, start: Int) {
 @Composable
 internal fun PostDetailDialog(act: MainActivity, postId: String) {
     val post = act.postsRaw.toList().firstOrNull { it.key == postId }
-    val mediaVer by act.statsVer
+    // Подписываемся на mediaCache чтобы перерисовать когда фото загрузится
+    val mediaHash = act.mediaCache[postId]?.hashCode() ?: 0
+    val ver by act.statsVer
     LaunchedEffect(postId) { incViews(act, postId) }
     Dialog(onDismissRequest = { act.dialog.value = null }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Column(Modifier.fillMaxSize().background(ic(P.bg))) {
@@ -489,7 +493,7 @@ internal fun PostDetailDialog(act: MainActivity, postId: String) {
                 Text("Пост", color = ic(P.text), fontSize = 17.sp, fontWeight = FontWeight.Bold, fontFamily = fontUnbounded)
             }
             LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(0.dp, 6.dp, 0.dp, 20.dp)) {
-                if (post != null) item(key = "$postId:$mediaVer") { PostCard(act, post) }
+                if (post != null) item(key = "$postId:$ver:$mediaHash") { PostCard(act, post) }
                 else item { Text("Не удалось загрузить пост", color = ic(P.textSec), fontSize = 14.sp, modifier = Modifier.padding(14.dp)) }
             }
         }
@@ -518,9 +522,10 @@ internal fun ViewerDialog(act: MainActivity) {
 @Composable
 private fun ZoomImage(b64: String, key: String = "") {
     val ctx = LocalContext.current
-    val req = 1080
+    // 720px — оптимально для полноэкранного просмотра на телефоне, не вызывает OOM
+    val req = 720
     val shown = rememberDecoded(b64, req, if (key.isEmpty()) null else key)
-    val stableKey = if (key.contains(":")) key else "${b64.hashCode()}:$key"
+    val stableKey = if (key.contains(":")) key else "${b64.hashCode().toLong().and(0x7FFFFFFF)}:$key"
     var scale by remember(stableKey) { mutableStateOf(1f) }
     var t by remember(stableKey) { mutableStateOf(Offset.Zero) }
     Box(
