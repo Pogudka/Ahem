@@ -4,7 +4,6 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
-import android.util.Base64
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -57,14 +56,14 @@ import java.io.File
 import java.io.FileOutputStream
 import kotlin.coroutines.resume
 
+// Твои шрифты
 internal val fontUnbounded = FontFamily(Font(R.font.unbounded))
 internal val fontUbuntuReg = FontFamily(Font(R.font.ubuntu_regular))
 
 private const val DISK_CACHE_LIMIT = 160
 
-// ic(Int) — в LiquidGlass.kt; P/fmtNum/getTs/isDark/applyTheme/dbDenied — в Theme.kt;
-// readOnce/readStatsInto/txWithRetry/scheduleMigration — в Stats.kt; Msg/PeerRow/чаты — в Chats.kt;
-// Acc/аккаунты — в Account.kt; VideoScreen — в Video.kt; LiquidGlass — в LiquidGlass.kt.
+// Примечание: P, fmtNum, getTs, decodeScaled, isDark, applyTheme, dbDenied 
+// теперь живут в Theme.kt и не дублируются здесь.
 
 @Composable
 internal fun CardSurface(modifier: Modifier = Modifier, radius: Int = 18, withBorder: Boolean = true, content: @Composable () -> Unit) {
@@ -73,6 +72,7 @@ internal fun CardSurface(modifier: Modifier = Modifier, radius: Int = 18, withBo
             .background(ic(P.surface), RoundedCornerShape(radius.dp))
             .then(if (withBorder) Modifier.border(1.dp, ic(P.border), RoundedCornerShape(radius.dp)) else Modifier)
     ) {
+        // ВАЖНО: Column внутри Box, чтобы элементы не накладывались друг на друга
         Column(Modifier.fillMaxWidth()) { content() }
     }
 }
@@ -87,7 +87,10 @@ internal fun GlassIconButton(icon: Int, modifier: Modifier = Modifier, onClick: 
 @Composable
 internal fun AccentButton(text: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
     Box(
-        modifier.height(44.dp).background(ic(P.accent), RoundedCornerShape(14.dp)).clickable(onClick = onClick),
+        modifier
+            .height(44.dp)
+            .background(ic(P.accent), RoundedCornerShape(14.dp))
+            .clickable(onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
         Text(text, color = ic(P.accentText), fontSize = 15.sp, fontWeight = FontWeight.Medium)
@@ -97,8 +100,11 @@ internal fun AccentButton(text: String, modifier: Modifier = Modifier, onClick: 
 @Composable
 internal fun OutlineButton(text: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
     Box(
-        modifier.height(44.dp).background(Color.Transparent, RoundedCornerShape(14.dp))
-            .border(1.dp, ic(P.border), RoundedCornerShape(14.dp)).clickable(onClick = onClick),
+        modifier
+            .height(44.dp)
+            .background(Color.Transparent, RoundedCornerShape(14.dp))
+            .border(1.dp, ic(P.border), RoundedCornerShape(14.dp))
+            .clickable(onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
         Text(text, color = ic(P.text), fontSize = 14.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(horizontal = 16.dp))
@@ -108,7 +114,10 @@ internal fun OutlineButton(text: String, modifier: Modifier = Modifier, onClick:
 @Composable
 internal fun Avatar(b64: String, nick: String, sizeDp: Dp, stableKey: String? = null) {
     val shown = if (b64.isNotEmpty()) rememberDecoded(b64, (sizeDp.value * 2).toInt(), stableKey) else null
-    Box(Modifier.size(sizeDp).clip(CircleShape).background(ic(P.fieldBg)), contentAlignment = Alignment.Center) {
+    Box(
+        Modifier.size(sizeDp).clip(CircleShape).background(ic(P.fieldBg)),
+        contentAlignment = Alignment.Center
+    ) {
         if (shown != null) Image(bitmap = shown.asImageBitmap(), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxWidth().height(sizeDp))
         else Text(nick.take(1).uppercase(), color = ic(P.text), fontSize = (sizeDp.value * 0.5f).sp, fontWeight = FontWeight.Bold)
     }
@@ -143,8 +152,12 @@ internal fun StatCol(value: Long, label: String, modifier: Modifier = Modifier, 
     }
 }
 
-internal fun putAvatar(act: MainActivity, uid: String, b64: String) { act.avatarCache.value[uid] = b64 }
-internal fun putAvatars(act: MainActivity, map: Map<String, String>) { for ((k, v) in map) act.avatarCache.value[k] = v }
+internal fun putAvatar(act: MainActivity, uid: String, b64: String) {
+    act.avatarCache.value[uid] = b64
+}
+internal fun putAvatars(act: MainActivity, map: Map<String, String>) {
+    for ((k, v) in map) act.avatarCache.value[k] = v
+}
 internal fun hasAvatar(act: MainActivity, uid: String): Boolean = act.avatarCache.value.containsKey(uid)
 
 internal suspend fun awaitOnce(ref: DatabaseReference): DataSnapshot = suspendCancellableCoroutine { cont ->
@@ -169,60 +182,37 @@ private fun trimDisk(dir: File) {
     } catch (e: Exception) {}
 }
 
-// Безопасный декод с RGB_565 (в 2 раза меньше памяти) и защитой от OOM
-private fun decodeSafe(b64: String, px: Int): Bitmap? {
-    return try {
-        val raw = Base64.decode(b64, Base64.NO_WRAP)
-        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeByteArray(raw, 0, raw.size, bounds)
-        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
-        var sample = 1
-        while (bounds.outWidth / (sample * 2) >= px && bounds.outHeight / (sample * 2) >= px) sample *= 2
-        val opts = BitmapFactory.Options().apply {
-            inSampleSize = sample
-            inPreferredConfig = Bitmap.Config.RGB_565
-            inPurgeable = true
-            inInputShareable = true
-        }
-        BitmapFactory.decodeByteArray(raw, 0, raw.size, opts)
-    } catch (e: OutOfMemoryError) {
-        try {
-            // Фоллбэк: ещё больший sample
-            val raw = Base64.decode(b64, Base64.NO_WRAP)
-            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            BitmapFactory.decodeByteArray(raw, 0, raw.size, bounds)
-            var sample = 1
-            while (bounds.outWidth / (sample * 2) >= px / 2 && bounds.outHeight / (sample * 2) >= px / 2) sample *= 2
-            val opts = BitmapFactory.Options().apply {
-                inSampleSize = sample * 2
-                inPreferredConfig = Bitmap.Config.RGB_565
-            }
-            BitmapFactory.decodeByteArray(raw, 0, raw.size, opts)
-        } catch (e2: Exception) { null }
-    } catch (e: Exception) { null }
-}
-
+// Оптимизированный декод с использованием безопасного decodeScaled из Theme.kt
 @Composable
 internal fun rememberDecoded(b64: String, px: Int, stableKey: String? = null): Bitmap? {
     val act = LocalContext.current as? MainActivity
-    // Стабильный ключ без отрицательных чисел
     val hash = (b64.hashCode().toLong() and 0x7FFFFFFF).toString()
-    val key = if (stableKey != null) "${stableKey}_${px}" else "${hash}_$px"
+    val key = if (stableKey != null) "${stableKey}_$px" else "${hash}_$px"
+    
     var bmp by remember(key) { mutableStateOf(act?.bmpCache?.get(key)) }
+    
     LaunchedEffect(key) {
         if (b64.isEmpty()) { bmp = null; return@LaunchedEffect }
         val a = act ?: return@LaunchedEffect
+        
+        // 1. Проверка кэша в памяти
         val mem = a.bmpCache[key]
         if (mem != null) { bmp = mem; return@LaunchedEffect }
+        
+        // 2. Загрузка или декод в фоне
         val loaded = withContext(Dispatchers.IO) {
             val f = diskFile(a, key)
             if (f.exists() && f.length() > 0) {
                 try {
                     val d = BitmapFactory.decodeFile(f.absolutePath)
                     if (d != null) return@withContext d
-                } catch (e: Exception) { f.delete() }
+                } catch (e: Exception) { 
+                    f.delete() // Битый файл, удаляем
+                }
             }
-            val d = decodeSafe(b64, px)
+            
+            // Вызываем безопасный decodeScaled из Theme.kt
+            val d = decodeScaled(b64, px)
             if (d != null) {
                 try {
                     val tmp = File(f.parentFile, "$key.tmp")
@@ -233,6 +223,8 @@ internal fun rememberDecoded(b64: String, px: Int, stableKey: String? = null): B
             }
             d
         }
+        
+        // 3. Сохранение в кэш памяти
         if (loaded != null) {
             a.bmpCache[key] = loaded
             bmp = loaded
