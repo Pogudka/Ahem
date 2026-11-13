@@ -60,7 +60,6 @@ internal fun applyTheme(ctx: Context, dark: Boolean) {
 internal fun isDark(ctx: Context): Boolean =
     ctx.getSharedPreferences("ahem", Context.MODE_PRIVATE).getBoolean("dark", false)
 
-// тихий: технические всплывашки убраны по просьбе, ошибки БД больше не тукаем
 internal fun dbDenied(act: MainActivity, error: DatabaseError) {
     // no-op
 }
@@ -103,20 +102,28 @@ internal fun parseCount(t: TextView): Int {
     }
 }
 
+// <-- ИЗМЕНЕНИЕ ЗДЕСЬ: Безопасный декод с экономией памяти и защитой от OOM
 internal fun decodeScaled(b64: String, reqPx: Int): Bitmap? {
     return try {
         val bytes = Base64.decode(b64, Base64.NO_WRAP)
-        val bounds = BitmapFactory.Options()
-        bounds.inJustDecodeBounds = true
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        
         var sample = 1
         val req = reqPx.coerceAtLeast(1)
-        while (bounds.outWidth / sample / 2 >= req && bounds.outHeight / sample / 2 >= req) {
+        while (bounds.outWidth / (sample * 2) >= req && bounds.outHeight / (sample * 2) >= req) {
             sample *= 2
         }
-        val opts = BitmapFactory.Options()
-        opts.inSampleSize = sample
+        
+        val opts = BitmapFactory.Options().apply {
+            inSampleSize = sample
+            inPreferredConfig = Bitmap.Config.RGB_565 // Экономит 50% памяти
+            inPurgeable = true
+        }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+    } catch (e: OutOfMemoryError) {
+        null
     } catch (e: Exception) {
         null
     }
