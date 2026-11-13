@@ -31,6 +31,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -61,7 +62,7 @@ class MainActivity : ComponentActivity() {
     internal lateinit var database: DatabaseReference
 
     internal val avatarCache = mutableStateOf(HashMap<String, String>())
-    internal val mediaCache = HashMap<String, String>()
+    internal val mediaCache = mutableStateMapOf<String, String>() // <-- ИЗМЕНЕНИЕ ЗДЕСЬ
     internal val bmpCache: LinkedHashMap<String, Bitmap> = object : LinkedHashMap<String, Bitmap>(24, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Bitmap>): Boolean = size > 24
     }
