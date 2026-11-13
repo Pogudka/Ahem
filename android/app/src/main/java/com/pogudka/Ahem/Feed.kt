@@ -391,7 +391,6 @@ internal fun PostCard(act: MainActivity, post: DataSnapshot) {
 
 @Composable
 private fun MediaBlock(act: MainActivity, postId: String, mediaCount: Int) {
-    // Читаем mediaCache напрямую — это заставляет Compose перерисовать при обновлении
     val cachedMedia = act.mediaCache[postId]
     var str by remember(postId) { mutableStateOf(cachedMedia) }
     LaunchedEffect(postId, cachedMedia) {
@@ -421,7 +420,8 @@ private fun MediaBlock(act: MainActivity, postId: String, mediaCount: Int) {
             .clip(RoundedCornerShape(14.dp)).background(ic(P.surface))
     ) {
         if (images.isNotEmpty()) {
-            val decW = (imgW * 0.6f).toInt().coerceAtLeast(360)
+            // <-- ИЗМЕНЕНИЕ ЗДЕСЬ: Фиксированный маленький размер для ленты
+            val decW = 400
             if (images.size == 1) SingleImage(act, images[0], imgW, decW, images, 0, "$postId:0") 
             else GridImages(act, images, imgW, postId)
         }
@@ -481,7 +481,6 @@ internal fun openViewer(act: MainActivity, images: List<String>, start: Int) {
 @Composable
 internal fun PostDetailDialog(act: MainActivity, postId: String) {
     val post = act.postsRaw.toList().firstOrNull { it.key == postId }
-    // Подписываемся на mediaCache чтобы перерисовать когда фото загрузится
     val mediaHash = act.mediaCache[postId]?.hashCode() ?: 0
     val ver by act.statsVer
     LaunchedEffect(postId) { incViews(act, postId) }
@@ -522,8 +521,8 @@ internal fun ViewerDialog(act: MainActivity) {
 @Composable
 private fun ZoomImage(b64: String, key: String = "") {
     val ctx = LocalContext.current
-    // 720px — оптимально для полноэкранного просмотра на телефоне, не вызывает OOM
-    val req = 720
+    // <-- ИЗМЕНЕНИЕ ЗДЕСЬ: Ограничение размера для полноэкранного просмотра
+    val req = 800
     val shown = rememberDecoded(b64, req, if (key.isEmpty()) null else key)
     val stableKey = if (key.contains(":")) key else "${b64.hashCode().toLong().and(0x7FFFFFFF)}:$key"
     var scale by remember(stableKey) { mutableStateOf(1f) }
